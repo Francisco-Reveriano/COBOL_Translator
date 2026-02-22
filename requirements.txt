@@ -17,6 +17,14 @@ strands-agents-builder
 # Jupyter/Notebooks
 ipywidgets
 
+# FastAPI Backend
+fastapi
+uvicorn[standard]
+sse-starlette
+python-multipart
+pydantic>=2.0
+pydantic-settings
+
 # LLM Providers
 anthropic
 openai

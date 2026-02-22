@@ -1,36 +1,209 @@
-# COBOL-to-Python Conversion Agent
+# COBOL-to-Python Migration Platform
 
-An agentic COBOL-to-Python migration system powered by [Strands Agents](https://github.com/strands-agents/sdk-python) and Claude (Anthropic). The agent autonomously scans COBOL source files, builds a dependency-ordered conversion plan, translates each program to Python, validates the output, and produces a migration report.
-
-Inspired by Claude Code's single-threaded master loop with structured planning (TodoWrite pattern).
+A full-stack agentic COBOL-to-Python migration system powered by [Strands Agents](https://github.com/strands-agents/sdk-python), Claude (Anthropic), and GPT-5.2-Codex (OpenAI) for quality scoring. Features a FastAPI backend with SSE streaming, a React UI with real-time visualization, interactive dependency graphs, WebSocket steering, and crash recovery.
 
 ## Architecture
 
-The agent executes a 5-phase workflow:
+```
+┌─────────────┐     SSE      ┌───────────────────────────────────────────┐
+│   React UI  │◄────────────►│  FastAPI Backend (localhost:8000)         │
+│  (Vite dev) │   WebSocket  │                                           │
+│  :5173      │──────────────│  ┌─────────────────────────────────────┐  │
+└─────────────┘              │  │  Strands Agent (Claude)             │  │
+                             │  │  ┌──────┐ ┌──────┐ ┌─────────────┐│  │
+                             │  │  │Scan  │→│Plan  │→│Convert+Score││  │
+                             │  │  └──────┘ └──────┘ └─────────────┘│  │
+                             │  │  ┌──────────┐ ┌────────┐          │  │
+                             │  │  │Validate  │→│Report  │          │  │
+                             │  │  └──────────┘ └────────┘          │  │
+                             │  └─────────────────────────────────────┘  │
+                             │  GPT-5.2-Codex ◄── Quality Scoring       │
+                             └───────────────────────────────────────────┘
+```
+
+### 6-Phase Pipeline
+
+| Phase | Tool | Description |
+|-------|------|-------------|
+| Scan | `cobol_scanner` | Analyze COBOL files, extract structure and dependencies |
+| Plan | `conversion_planner` | Generate dependency-ordered conversion plan (TodoWrite pattern) |
+| Convert | `cobol_converter` | Loop through plan items, converting COBOL to Python |
+| Score | `quality_scorer` | GPT-5.2-Codex evaluates each module on 4 dimensions |
+| Validate | `validation_checker` | Syntax, structural coverage, data type mapping checks |
+| Report | Final summary | Migration report with all quality scores |
+
+### Quality Scoring Rubric
+
+| Dimension | Weight | Description |
+|-----------|--------|-------------|
+| Correctness | 35% | Logic faithfulness, data type mapping, control flow |
+| Completeness | 25% | All paragraphs/sections converted, no TODOs left |
+| Maintainability | 20% | Type hints, docstrings, naming conventions |
+| Banking Compliance | 20% | Decimal precision, error handling, audit readiness |
+
+Thresholds: Green >= 85, Yellow 70-84, Red < 70
+
+## Project Structure
 
 ```
-Phase 1: SCAN      Analyze COBOL files, extract structure and dependencies
-       |
-Phase 2: PLAN      Generate a dependency-ordered conversion plan (TodoWrite pattern)
-       |
-Phase 3: CONVERT   Loop through each plan item, converting COBOL to Python
-       |
-Phase 4: VALIDATE  Check syntax, structural coverage, and data type mappings
-       |
-Phase 5: REPORT    Produce a final migration summary
+Code_Translation/
+├── Backend/
+│   ├── api.py                    # FastAPI application (SSE, WebSocket, REST)
+│   ├── config.py                 # Pydantic Settings (.env validation)
+│   ├── schemas.py                # Pydantic v2 request/response models
+│   ├── event_bus.py              # SSE event buffer with replay
+│   ├── session.py                # Session state + checkpoint persistence
+│   ├── audit_log.py              # JSONL audit trail
+│   └── Agents/
+│       ├── agent.py              # Strands agent (CLI + API dual-mode)
+│       ├── Prompts/
+│       │   └── system_prompts.py # Agent system prompt
+│       └── Tools/
+│           ├── cobol_scanner.py      # COBOL file analysis
+│           ├── conversion_planner.py # Plan generation
+│           ├── cobol_converter.py    # COBOL-to-Python scaffolding
+│           ├── plan_tracker.py       # Plan state management
+│           ├── validation_checker.py # Output validation + test stubs
+│           └── quality_scorer.py     # GPT-5.2-Codex integration
+├── Frontend/
+│   ├── src/
+│   │   ├── App.tsx               # Main layout with split panes
+│   │   ├── components/           # 13 React components
+│   │   ├── hooks/                # useSSE, useWebSocket, useTheme
+│   │   ├── stores/               # Central reducer store
+│   │   └── types/                # TypeScript event types
+│   ├── package.json
+│   └── vite.config.ts
+├── Data/                         # Sample COBOL files
+├── .env                          # API keys
+├── requirements.txt              # Python dependencies
+└── .cobol2py/                    # Recovery checkpoint
 ```
 
-### Tools
+## Prerequisites
 
-| Tool | Purpose |
-|------|---------|
-| `cobol_scanner` | Parses COBOL files to extract divisions, sections, paragraphs, data definitions, COPY/CALL dependencies, embedded SQL/CICS detection, and complexity scoring |
-| `conversion_planner` | Generates a structured plan with topological ordering based on the dependency graph. Each item has an ID, status, priority, phase, and detailed conversion notes |
-| `cobol_converter` | Reads COBOL source, generates Python scaffolding and conversion context for the LLM to produce a complete Python module |
-| `plan_tracker` | Manages plan state (view, update status, check dependencies, get next item, show progress). Acts as the agent's memory during long conversions |
-| `validation_checker` | Post-conversion validation: Python syntax (AST parsing), structural coverage, data type mapping checks, and pytest test stub generation |
+- Python 3.10+
+- Node.js 18+
+- [Anthropic API key](https://console.anthropic.com/)
+- [OpenAI API key](https://platform.openai.com/) (for quality scoring)
 
-### Conversion Rules
+## Setup
+
+### 1. Python backend
+
+```bash
+cd Code_Translation
+python -m venv .venv
+source .venv/bin/activate   # macOS/Linux
+pip install -r requirements.txt
+```
+
+### 2. React frontend
+
+```bash
+cd Frontend
+npm install
+```
+
+### 3. Configure API keys
+
+Create a `.env` file in the project root:
+
+```bash
+ANTHROPIC_API_KEY="sk-ant-api03-your-key-here"
+OPENAI_API_KEY="sk-your-openai-key-here"
+```
+
+Optional overrides:
+
+```bash
+ADVANCE_LLM_MODEL="claude-sonnet-4-20250514"  # Default model
+OUTPUT_DIR="./output"                           # Conversion output
+INPUT_DIR="./input"                             # Uploaded COBOL files
+```
+
+## Running
+
+### Full-Stack Mode (recommended)
+
+Terminal 1 — Backend:
+```bash
+cd Code_Translation
+source .venv/bin/activate
+uvicorn Backend.api:app --host 0.0.0.0 --port 8000
+```
+
+Terminal 2 — Frontend:
+```bash
+cd Code_Translation/Frontend
+npm run dev
+```
+
+Open http://localhost:5173 in your browser.
+
+### CLI Mode (no UI)
+
+```bash
+python Backend/Agents/agent.py ./Data --output ./output
+```
+
+## Usage
+
+### Web UI Workflow
+
+1. **Upload** — Drag-and-drop `.cbl/.cob/.cpy` files or use the file picker
+2. **Convert** — Click "Start Conversion" to begin the 6-phase pipeline
+3. **Monitor** — Watch the streaming activity panel, step timeline, and dependency graph
+4. **Steer** — Use Pause/Resume/Skip/Retry buttons during conversion
+5. **Review** — Browse converted files in the Monaco editor, compare in Diff View
+6. **Download** — Get a ZIP archive of all converted files
+
+### Steering Commands (WebSocket)
+
+| Command | Effect |
+|---------|--------|
+| PAUSE | Suspends agent after current tool completes |
+| RESUME | Continues from where it paused |
+| SKIP | Marks current module as skipped, advances to next |
+| RETRY | Re-runs conversion on the current or specified module |
+
+### Crash Recovery
+
+If the server is killed mid-conversion:
+- State is persisted to `.cobol2py/state.json`
+- On next startup, the UI will prompt "Resume previous conversion?"
+- Choosing Resume continues from the last completed plan item
+- Choosing Start Fresh discards the checkpoint
+
+### Audit Trail
+
+All events are logged to `./output/logs/session_{id}_{timestamp}.jsonl`:
+- Tool calls and results
+- Quality scores
+- Errors and retries
+- Reasoning excerpts
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/upload` | Upload COBOL source files |
+| POST | `/api/v1/convert` | Start conversion |
+| GET | `/api/v1/convert/stream` | SSE event stream |
+| GET | `/api/v1/convert/status` | Current session status |
+| GET | `/api/v1/convert/plan` | Full conversion plan |
+| GET | `/api/v1/convert/scores` | Quality scores |
+| GET | `/api/v1/convert/graph` | React Flow dependency graph |
+| GET | `/api/v1/convert/resume` | Check for resumable conversion |
+| POST | `/api/v1/convert/resume` | Resume interrupted conversion |
+| DELETE | `/api/v1/convert/resume` | Discard checkpoint |
+| GET | `/api/v1/files` | List COBOL and Python files |
+| GET | `/api/v1/files/content` | Serve file content |
+| GET | `/api/v1/download` | ZIP archive of output |
+| GET | `/api/v1/config` | Current configuration |
+| WS | `/api/v1/ws` | WebSocket steering |
+
+## Conversion Rules
 
 | COBOL | Python |
 |-------|--------|
@@ -42,174 +215,19 @@ Phase 5: REPORT    Produce a final migration summary
 | `PERFORM paragraph` | Function call |
 | `PERFORM UNTIL` | `while` loop |
 | `PERFORM VARYING` | `for` loop |
-| `EVALUATE / WHEN` | `match / case` (Python 3.10+) |
+| `EVALUATE / WHEN` | `match / case` |
 | Sequential file I/O | `csv` / `open()` |
 | Indexed file I/O | `sqlite3` |
 | `EXEC SQL` | SQLAlchemy / parameterized queries |
-| `CALL` dependencies | Function imports |
-
-## Project Structure
-
-```
-Code_Translation/
-├── Backend/
-│   └── Agents/
-│       ├── agent.py                  # Main entry point
-│       ├── Prompts/
-│       │   └── system_prompts.py     # Agent system prompt and refinement prompt
-│       └── Tools/
-│           ├── cobol_scanner.py      # COBOL file analysis
-│           ├── conversion_planner.py # Plan generation (TodoWrite pattern)
-│           ├── cobol_converter.py    # COBOL-to-Python scaffolding
-│           ├── plan_tracker.py       # Plan state management
-│           └── validation_checker.py # Output validation and test stubs
-├── Data/
-│   ├── ACCT-PROC.cbl                # Sample: account processing with interest calc
-│   └── Raw/
-│       ├── CBL0106.cbl              # Sample: financial report program
-│       └── CBL0106C.cbl             # Sample: improved version with overflow protection
-├── .env                              # API keys (not committed to version control)
-├── requirements.txt                  # Python dependencies
-└── README.md
-```
-
-## Prerequisites
-
-- Python 3.10+
-- An [Anthropic API key](https://console.anthropic.com/)
-
-## Setup
-
-### 1. Clone and enter the project
-
-```bash
-cd Code_Translation
-```
-
-### 2. Create a virtual environment
-
-```bash
-python -m venv .venv
-source .venv/bin/activate  # macOS/Linux
-# .venv\Scripts\activate   # Windows
-```
-
-### 3. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 4. Configure your API key
-
-Create a `.env` file in the project root:
-
-```bash
-ANTHROPIC_API_KEY="sk-ant-api03-your-key-here"
-```
-
-Optionally override the default model:
-
-```bash
-ADVANCE_LLM_MODEL="claude-sonnet-4-20250514"
-```
-
-## Usage
-
-### Basic usage
-
-Convert the included sample COBOL files:
-
-```bash
-python Backend/Agents/agent.py ./Data
-```
-
-### Specify a custom output directory
-
-```bash
-python Backend/Agents/agent.py ./Data --output ./my_output
-```
-
-### Convert your own COBOL files
-
-Point the agent at any directory containing `.cbl`, `.cob`, or `.cpy` files:
-
-```bash
-python Backend/Agents/agent.py /path/to/your/cobol/sources --output ./converted
-```
-
-### Example session
-
-```
-$ python Backend/Agents/agent.py ./Data
-
-2025-06-15 10:32:01 [INFO] Starting COBOL-to-Python conversion agent...
-2025-06-15 10:32:01 [INFO]    Source: ./Data
-2025-06-15 10:32:01 [INFO]    Output: ./output
-
-────────────────────────────────────────────────────────
-  ⚙  Tool: cobol_scanner
-────────────────────────────────────────────────────────
-Scanning 3 COBOL files...
-
-────────────────────────────────────────────────────────
-  ⚙  Tool: conversion_planner
-────────────────────────────────────────────────────────
-Generating conversion plan with 3 programs...
-
-────────────────────────────────────────────────────────
-  ⚙  Tool: plan_tracker
-────────────────────────────────────────────────────────
-Plan created: 5 items across 4 phases
-
-────────────────────────────────────────────────────────
-  ⚙  Tool: cobol_converter
-────────────────────────────────────────────────────────
-Converting ACCT-PROC (141 lines)...
-
-...
-
-✅ Agent turn complete.
-
-2025-06-15 10:35:47 [INFO] Migration report saved to output/migration_report.md
-```
-
-### Output structure
-
-After a successful run, the output directory contains:
-
-```
-output/
-├── conversion_plan.json        # Full conversion plan with statuses
-├── migration_report.md         # Final migration summary
-├── programs/
-│   ├── acct_proc.py            # Converted Python modules
-│   ├── cbl0106.py
-│   └── cbl0106c.py
-├── shared/                     # Shared copybook conversions (if any)
-├── tests/
-│   ├── test_acct_proc.py       # Auto-generated pytest stubs
-│   ├── test_cbl0106.py
-│   └── test_cbl0106c.py
-└── main.py                     # Integration entry point
-```
+| `EXEC CICS` | REST API / microservice calls |
 
 ## Sample COBOL Files
 
-The `Data/` directory includes three sample programs for testing:
-
 | File | Description | Features |
 |------|-------------|----------|
-| `ACCT-PROC.cbl` | Account processing with interest calculation | `EVALUATE/WHEN`, sequential file I/O, `COMP-3` packed decimal |
-| `CBL0106.cbl` | Financial report generator | Virginia client tracking, over-limit detection, formatted report output |
-| `CBL0106C.cbl` | Improved financial report | Same as CBL0106 with bounds checking and overflow protection |
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `ANTHROPIC_API_KEY` | *(required)* | Your Anthropic API key |
-| `ADVANCE_LLM_MODEL` | `claude-sonnet-4-20250514` | Claude model ID to use |
+| `ACCT-PROC.cbl` | Account processing | `EVALUATE/WHEN`, file I/O, `COMP-3` |
+| `CBL0106.cbl` | Financial report | Client tracking, over-limit detection |
+| `CBL0106C.cbl` | Improved financial report | Bounds checking, overflow protection |
 
 ## Author
 

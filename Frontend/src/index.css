@@ -1,0 +1,171 @@
+@import "tailwindcss";
+
+/*
+ * COBOL-to-Python Migration Platform
+ * Brand palette derived from PRD Section 5.4.3
+ * All surfaces, accents, and interactive elements map to these tokens.
+ */
+
+/* ── Light theme (default) ─────────────────────────────────────── */
+:root {
+  --bg-primary: #FFFFFF;
+  --bg-secondary: #F0F4F7;
+  --bg-card: #FFFFFF;
+  --text-primary: #051C2C;
+  --text-secondary: #3D5A6E;
+  --border-color: #D4DEE5;
+  --accent: #00A9F4;
+  --accent-alt: #1F40E6;
+  --accent-hover: #0090D1;
+  --score-green: #0D8A6A;
+  --score-yellow: #B45309;
+  --score-red: #DC2626;
+  --code-bg: #F0F4F7;
+  --stream-bg: #FAFBFC;
+  --step-active: #00A9F4;
+  --step-done: #0D8A6A;
+  --node-pending: #D4DEE5;
+  --node-active: #00A9F4;
+  --node-pass: #0D8A6A;
+  --node-fail: #DC2626;
+  --edge-call: #051C2C;
+  --edge-copy: #00A9F4;
+  --edge-critical: #DC2626;
+  --text-muted: #8899A6;
+  --accent-primary: #00A9F4;
+}
+
+/* ── Dark theme ────────────────────────────────────────────────── */
+.dark {
+  --bg-primary: #051C2C;
+  --bg-secondary: #0A2A3D;
+  --bg-card: #0E3349;
+  --text-primary: #FFFFFF;
+  --text-secondary: #8FAABB;
+  --border-color: #153D52;
+  --accent: #00A9F4;
+  --accent-alt: #4F6FFF;
+  --accent-hover: #33BBFF;
+  --score-green: #34D399;
+  --score-yellow: #FBBF24;
+  --score-red: #F87171;
+  --code-bg: #031520;
+  --stream-bg: #020E18;
+  --step-active: #00A9F4;
+  --step-done: #34D399;
+  --node-pending: #153D52;
+  --node-active: #00A9F4;
+  --node-pass: #34D399;
+  --node-fail: #F87171;
+  --edge-call: #8FAABB;
+  --edge-copy: #00A9F4;
+  --edge-critical: #F87171;
+  --text-muted: #5C7A8E;
+  --accent-primary: #00A9F4;
+}
+
+/* ── Base styles ───────────────────────────────────────────────── */
+* {
+  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+}
+
+html {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  min-width: 1280px;
+  min-height: 100vh;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-secondary);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-secondary);
+}
+
+/* ── Utility classes ───────────────────────────────────────────── */
+.pulse-active {
+  animation: pulseGlow 2s ease-in-out infinite;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 4px var(--step-active); }
+  50% { box-shadow: 0 0 16px var(--step-active); }
+}
+
+.typewriter-cursor::after {
+  content: '|';
+  animation: blink 1s step-end infinite;
+  color: var(--accent);
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@keyframes pulse-active {
+  0%, 100% { box-shadow: 0 0 4px var(--accent-primary); }
+  50% { box-shadow: 0 0 16px var(--accent-primary); }
+}
+
+/* Score badge fade-in with color ring (FR-5.8) */
+@keyframes score-appear {
+  0% { opacity: 0; transform: scale(0.5); }
+  60% { opacity: 1; transform: scale(1.15); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.score-badge-animate {
+  animation: score-appear 0.6s ease-out forwards;
+}
+
+/* Score counter animation */
+@keyframes score-ring {
+  0% { box-shadow: 0 0 0 0 currentColor; }
+  50% { box-shadow: 0 0 0 4px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.score-ring-animate {
+  animation: score-ring 1s ease-out;
+}
+
+/* ── React Flow overrides ────────────────────────────────────── */
+.react-flow__background {
+  background-color: var(--bg-primary) !important;
+}
+.react-flow__minimap {
+  background-color: var(--bg-secondary) !important;
+}
+.react-flow__controls button {
+  background-color: var(--bg-secondary) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border-color) !important;
+}
+.react-flow__controls button:hover {
+  background-color: var(--bg-card) !important;
+}
+.react-flow__controls button svg {
+  fill: var(--text-primary) !important;
+}

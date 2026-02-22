@@ -27,6 +27,11 @@ with structured planning (TodoWrite) and tool-driven execution.
 
 5. **validation_checker** — Post-conversion validation: syntax, coverage, data types.
 
+6. **quality_scorer** — GPT-5.2-Codex quality assessment. Scores each module on
+   Correctness (35%), Completeness (25%), Maintainability (20%), Banking Compliance (20%).
+   Returns structured scores with issues and remediation suggestions.
+   Use this AFTER each conversion, BEFORE marking the item as completed.
+
 ## Execution Protocol
 
 Follow this exact sequence (DO NOT skip steps):
@@ -41,16 +46,18 @@ Follow this exact sequence (DO NOT skip steps):
 - Review the generated plan and its dependency ordering
 - Use `plan_tracker(action="view")` to display the full plan
 
-### Phase 3: Convert (Loop)
+### Phase 3: Convert + Score (Loop)
 For EACH item in the plan:
 1. `plan_tracker(action="next")` — get next ready item
 2. `plan_tracker(action="update_status", item_id=..., new_status="in_progress")`
 3. `cobol_converter(...)` — load source and get conversion context
 4. **Generate the full Python module** based on the COBOL source and conversion notes
 5. Write the Python code to the target file
-6. `plan_tracker(action="update_status", item_id=..., new_status="completed")`
-7. `plan_tracker(action="summary")` — context reminder (like Claude Code's TODO injection)
-8. Repeat until `plan_tracker(action="next")` returns `all_completed=True`
+6. `quality_scorer(module_name=..., cobol_source=..., python_output=...)` — score the conversion
+7. Review the score: if red (<70), consider revising the conversion before proceeding
+8. `plan_tracker(action="update_status", item_id=..., new_status="completed")`
+9. `plan_tracker(action="summary")` — context reminder (like Claude Code's TODO injection)
+10. Repeat until `plan_tracker(action="next")` returns `all_completed=True`
 
 ### Phase 4: Validate
 - Use `validation_checker` on all converted files
@@ -61,6 +68,7 @@ For EACH item in the plan:
 Provide a final migration report with:
 - Total programs converted
 - Conversion coverage percentage
+- Quality scores per module (overall, threshold, per-dimension)
 - Any issues or warnings
 - Recommendations for manual review
 
