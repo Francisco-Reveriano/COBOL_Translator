@@ -1,0 +1,26 @@
+# Data Processing
+pandas
+openpyxl
+sqlalchemy
+xlsxwriter
+pyxlsb
+tqdm
+
+# Environment
+python-dotenv
+
+# Strands RCSA_Agents with OpenTelemetry and Anthropic support
+strands-agents[otel,anthropic]
+strands-agents-tools
+strands-agents-builder
+
+# Jupyter/Notebooks
+ipywidgets
+
+# LLM Providers
+anthropic
+openai
+openai-agents
+tiktoken
+claude-agent-sdk
+claude-code-sdk
