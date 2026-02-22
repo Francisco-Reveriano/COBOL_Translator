@@ -154,8 +154,16 @@ class AuditLogger:
         return self._entry_count
 
 
-def _truncate_dict(d: dict, max_str_len: int = 500) -> dict:
-    """Truncate string values in a dict for audit logging."""
+def _truncate_dict(d: Any, max_str_len: int = 500) -> Any:
+    """Truncate string values in a dict for audit logging.
+
+    Defensive: accepts str or non-dict inputs without crashing.
+    The Strands SDK may stringify tool results, so *d* is not always a dict.
+    """
+    if isinstance(d, str):
+        return d[:max_str_len] + f"... ({len(d)} chars total)" if len(d) > max_str_len else d
+    if not isinstance(d, dict):
+        return str(d)[:max_str_len]
     result = {}
     for k, v in d.items():
         if isinstance(v, str) and len(v) > max_str_len:

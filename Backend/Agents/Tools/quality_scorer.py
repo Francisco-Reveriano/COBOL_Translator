@@ -28,9 +28,20 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from typing import Callable
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
 
 logger = logging.getLogger(__name__)
+
+# Module-level SSE event callback (set by agent factory)
+_event_callback: Callable[[str, dict[str, Any]], None] | None = None
+
+
+def set_event_callback(cb: Callable[[str, dict[str, Any]], None] | None) -> None:
+    """Wire the SSE event callback from the agent factory."""
+    global _event_callback
+    _event_callback = cb
 
 # ---------------------------------------------------------------------------
 # Scoring Constants
@@ -168,7 +179,7 @@ def _score_with_codex(
     python_output: str,
     conversion_notes: str,
 ) -> dict:
-    """Call GPT-5.2-Codex with structured output to score the conversion."""
+    """Call GPT-5.2-Codex via the Responses API with structured output."""
     import openai
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -190,20 +201,24 @@ def _score_with_codex(
 
 Score this COBOL-to-Python conversion on all 4 dimensions."""
 
-    response = client.chat.completions.create(
+    response = client.responses.create(
         model=SCORE_MODEL,
-        messages=[
-            {"role": "system", "content": SCORING_SYSTEM_PROMPT},
+        input=[
+            {"role": "developer", "content": SCORING_SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
-        response_format={
-            "type": "json_schema",
-            "json_schema": SCORE_JSON_SCHEMA,
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": SCORE_JSON_SCHEMA["name"],
+                "strict": SCORE_JSON_SCHEMA["strict"],
+                "schema": SCORE_JSON_SCHEMA["schema"],
+            }
         },
-        reasoning_effort="high",  # FR-3.7
+        reasoning={"effort": "high"},  # FR-3.7
     )
 
-    content = response.choices[0].message.content
+    content = response.output_text
     return json.loads(content)
 
 
@@ -357,7 +372,20 @@ def quality_scorer(
     if cached:
         logger.info(f"Cache hit for {module_name} (key={cache_key[:8]})")
         cached["cached"] = True
-        return cached
+        if _event_callback:
+            try:
+                _event_callback("score", {
+                    "module": cached["module"],
+                    "scores": cached["scores"],
+                    "overall": cached["overall"],
+                    "threshold": cached["threshold"],
+                    "issues": cached.get("issues", []),
+                    "summary": cached.get("summary", ""),
+                    "fallback": cached.get("fallback", False),
+                })
+            except Exception as e:
+                logger.warning(f"Failed to emit cached score event: {e}")
+        return strands_result(cached)
 
     # Try GPT-5.2-Codex (FR-3.1)
     fallback = False
@@ -390,4 +418,19 @@ def quality_scorer(
         f"{' [fallback]' if fallback else ''}"
     )
 
-    return score_result
+    # Emit score SSE event for real-time UI updates
+    if _event_callback:
+        try:
+            _event_callback("score", {
+                "module": score_result["module"],
+                "scores": score_result["scores"],
+                "overall": score_result["overall"],
+                "threshold": score_result["threshold"],
+                "issues": score_result["issues"],
+                "summary": score_result["summary"],
+                "fallback": score_result.get("fallback", False),
+            })
+        except Exception as e:
+            logger.warning(f"Failed to emit score event: {e}")
+
+    return strands_result(score_result)

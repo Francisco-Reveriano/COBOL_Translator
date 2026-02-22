@@ -18,12 +18,13 @@ import json
 from pathlib import Path
 from typing import Any
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
 
 
 # ---------------------------------------------------------------------------
 # COBOL Parsing Helpers
 # ---------------------------------------------------------------------------
-COBOL_EXTENSIONS = {".cbl", ".cob", ".cpy", ".cob", ".cobol", ".pco"}
+COBOL_EXTENSIONS = {".cbl", ".cob", ".cpy", ".cobol", ".pco"}
 
 # Regex patterns for COBOL structure extraction
 PATTERNS = {
@@ -171,7 +172,7 @@ def cobol_scanner(directory: str) -> dict:
     """
     dir_path = Path(directory)
     if not dir_path.exists():
-        return {"error": f"Directory not found: {directory}"}
+        return strands_result({"error": f"Directory not found: {directory}"}, status="error")
 
     # Find all COBOL files
     cobol_files = []
@@ -179,7 +180,7 @@ def cobol_scanner(directory: str) -> dict:
         cobol_files.extend(dir_path.rglob(f"*{ext}"))
 
     if not cobol_files:
-        return {"error": f"No COBOL files found in {directory}", "extensions_checked": list(COBOL_EXTENSIONS)}
+        return strands_result({"error": f"No COBOL files found in {directory}", "extensions_checked": list(COBOL_EXTENSIONS)}, status="error")
 
     # Parse each file
     scan_results = []
@@ -212,9 +213,9 @@ def cobol_scanner(directory: str) -> dict:
         "scan_errors": len(errors),
     }
 
-    return {
+    return strands_result({
         "programs": scan_results,
         "dependency_graph": dep_graph,
         "summary": summary,
         "errors": errors,
-    }
+    })

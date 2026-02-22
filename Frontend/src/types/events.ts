@@ -15,6 +15,7 @@ export interface ToolCallEvent {
   id: string
   tool: string
   input: Record<string, unknown>
+  phase?: string
 }
 
 export interface ToolResultEvent {
@@ -22,6 +23,7 @@ export interface ToolResultEvent {
   tool: string
   output: Record<string, unknown>
   duration_ms: number
+  phase?: string
 }
 
 export interface PlanItem {

@@ -14,14 +14,101 @@ state as system messages after each tool use.
 """
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
 
+logger = logging.getLogger(__name__)
 
 # In-memory plan state (persisted to disk on each update)
 _plan_state: dict = {}
+
+# Module-level SSE event callback (set by agent factory)
+_event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None
+
+
+def set_event_callback(cb: Optional[Callable[[str, dict[str, Any]], None]]) -> None:
+    """Wire the SSE event callback from the agent factory."""
+    global _event_callback
+    _event_callback = cb
+
+
+def _emit_plan_update() -> None:
+    """Emit a plan_update SSE event with current plan state."""
+    if not _event_callback or not _plan_state.get("items"):
+        return
+    items = _plan_state["items"]
+    total = len(items)
+    completed = sum(1 for i in items if i["status"] in ("completed", "skipped"))
+    progress_pct = round(completed / total * 100, 1) if total else 0
+    try:
+        _event_callback("plan_update", {
+            "plan_id": _plan_state.get("plan_id", ""),
+            "items": [
+                {
+                    "id": i["id"],
+                    "title": i["title"],
+                    "status": i["status"],
+                    "phase": i["phase"],
+                    "program_id": i["program_id"],
+                    "complexity": i.get("complexity", ""),
+                }
+                for i in items
+            ],
+            "progress_pct": progress_pct,
+        })
+    except Exception as e:
+        logger.warning(f"Failed to emit plan_update: {e}")
+
+
+def _emit_flowchart_update() -> None:
+    """Emit a flowchart SSE event with current node statuses from the plan."""
+    if not _event_callback or not _plan_state.get("items"):
+        return
+    dep_graph = _plan_state.get("dependency_graph", {})
+    graph_nodes = dep_graph.get("nodes", [])
+    graph_edges = dep_graph.get("edges", [])
+    if not graph_nodes:
+        return
+
+    item_status = {}
+    item_score = {}
+    for item in _plan_state["items"]:
+        pid = item.get("program_id", "")
+        if pid and pid not in ("INTEGRATION", "VALIDATION"):
+            item_status[pid] = item["status"]
+
+    try:
+        _event_callback("flowchart", {
+            "nodes": [
+                {
+                    "id": n["id"],
+                    "label": n["id"],
+                    "type": "program",
+                    "status": item_status.get(n["id"], "pending"),
+                    "complexity": n.get("complexity", ""),
+                    "loc": n.get("loc", 0),
+                    "has_sql": False,
+                    "has_cics": False,
+                    "source_file": n.get("file", ""),
+                }
+                for n in graph_nodes
+            ],
+            "edges": [
+                {
+                    "id": f"e{i}",
+                    "source": e.get("from", ""),
+                    "target": e.get("to", ""),
+                    "type": e.get("type", "CALL"),
+                }
+                for i, e in enumerate(graph_edges)
+            ],
+        })
+    except Exception as e:
+        logger.warning(f"Failed to emit flowchart: {e}")
 
 
 def _load_plan(output_dir: str) -> dict:
@@ -117,7 +204,7 @@ def plan_tracker(
 
     plan = _load_plan(output_dir)
     if "error" in plan:
-        return plan
+        return strands_result(plan, status="error")
 
     # ── VIEW: Full plan display ──────────────────────────────────────────
     if action == "view":
@@ -136,12 +223,15 @@ def plan_tracker(
                 "conversion_notes": item["conversion_notes"],
             })
 
-        return {
+        _emit_plan_update()
+        _emit_flowchart_update()
+
+        return strands_result({
             "plan_id": plan["plan_id"],
             "total_items": len(plan["items"]),
             "items": display_items,
             "guidelines": plan.get("conversion_guidelines", {}),
-        }
+        })
 
     # ── SUMMARY: Compact context injection (like Claude Code's reminder) ─
     elif action == "summary":
@@ -160,7 +250,7 @@ def plan_tracker(
             None,
         )
 
-        return {
+        return strands_result({
             "plan_id": plan["plan_id"],
             "progress": status_counts,
             "completion_pct": round(
@@ -171,16 +261,16 @@ def plan_tracker(
                 "id": next_pending["id"],
                 "title": next_pending["title"],
             } if next_pending else None,
-        }
+        })
 
     # ── UPDATE_STATUS: Change item status ────────────────────────────────
     elif action == "update_status":
         if not item_id or not new_status:
-            return {"error": "item_id and new_status required for update_status"}
+            return strands_result({"error": "item_id and new_status required for update_status"}, status="error")
 
         valid_statuses = {"pending", "in_progress", "completed", "blocked", "skipped"}
         if new_status not in valid_statuses:
-            return {"error": f"Invalid status. Must be one of: {valid_statuses}"}
+            return strands_result({"error": f"Invalid status. Must be one of: {valid_statuses}"}, status="error")
 
         for item in _plan_state["items"]:
             if item["id"] == item_id:
@@ -203,22 +293,24 @@ def plan_tracker(
                     })
 
                 _save_plan(output_dir)
+                _emit_plan_update()
+                _emit_flowchart_update()
 
-                return {
+                return strands_result({
                     "updated": True,
                     "item_id": item_id,
                     "old_status": old_status,
                     "new_status": new_status,
                     "title": item["title"],
-                }
+                })
 
-        return {"error": f"Item {item_id} not found in plan"}
+        return strands_result({"error": f"Item {item_id} not found in plan"}, status="error")
 
     # ── CHECK_DEPS: Dependency readiness check ───────────────────────────
     elif action == "check_deps":
         if not item_id:
-            return {"error": "item_id required for check_deps"}
-        return _check_dependencies(item_id)
+            return strands_result({"error": "item_id required for check_deps"}, status="error")
+        return strands_result(_check_dependencies(item_id))
 
     # ── NEXT: Get next actionable item ───────────────────────────────────
     elif action == "next":
@@ -226,7 +318,7 @@ def plan_tracker(
             if item["status"] == "pending":
                 dep_check = _check_dependencies(item["id"])
                 if dep_check["ready"]:
-                    return {
+                    return strands_result({
                         "next_item": {
                             "id": item["id"],
                             "title": item["title"],
@@ -238,7 +330,7 @@ def plan_tracker(
                             "conversion_notes": item["conversion_notes"],
                         },
                         "dependencies_met": True,
-                    }
+                    })
 
         # Check if all done
         all_done = all(
@@ -246,9 +338,9 @@ def plan_tracker(
             for item in _plan_state["items"]
         )
         if all_done:
-            return {"next_item": None, "all_completed": True}
+            return strands_result({"next_item": None, "all_completed": True})
 
-        return {"next_item": None, "blocked": True, "reason": "All pending items have unmet dependencies"}
+        return strands_result({"next_item": None, "blocked": True, "reason": "All pending items have unmet dependencies"})
 
     # ── PROGRESS: Completion stats ───────────────────────────────────────
     elif action == "progress":
@@ -260,14 +352,14 @@ def plan_tracker(
             for i in items if i["status"] == "blocked"
         ]
 
-        return {
+        return strands_result({
             "total": total,
             "completed": completed,
             "in_progress": sum(1 for i in items if i["status"] == "in_progress"),
             "pending": sum(1 for i in items if i["status"] == "pending"),
             "blocked_items": blocked,
             "completion_pct": round(completed / total * 100, 1) if total else 0,
-        }
+        })
 
     else:
-        return {"error": f"Unknown action: {action}. Use: view, summary, update_status, check_deps, next, progress"}
+        return strands_result({"error": f"Unknown action: {action}. Use: view, summary, update_status, check_deps, next, progress"}, status="error")

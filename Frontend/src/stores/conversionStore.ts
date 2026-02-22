@@ -28,6 +28,10 @@ export interface ActivityEntry {
 export interface ConversionState {
   /** Current agent phase */
   phase: string
+  /** Currently executing tool name */
+  currentTool: string
+  /** Currently processing item/module ID */
+  currentItemId: string
   /** Activity stream entries */
   activities: ActivityEntry[]
   /** Plan items from plan_tracker */
@@ -45,6 +49,10 @@ export interface ConversionState {
   completion: CompleteEvent | null
   /** Is conversion running? */
   isRunning: boolean
+  /** Timestamp of last phase transition */
+  lastPhaseChangeAt: number
+  /** Timestamps of recent events for density calculation */
+  recentEventTimestamps: number[]
 }
 
 type Action =
@@ -61,6 +69,8 @@ type Action =
 
 const initialState: ConversionState = {
   phase: '',
+  currentTool: '',
+  currentItemId: '',
   activities: [],
   planItems: [],
   planId: '',
@@ -71,13 +81,23 @@ const initialState: ConversionState = {
   errors: [],
   completion: null,
   isRunning: false,
+  lastPhaseChangeAt: 0,
+  recentEventTimestamps: [],
+}
+
+const DENSITY_WINDOW_MS = 5000
+
+function pushTimestamp(timestamps: number[]): number[] {
+  const now = Date.now()
+  const cutoff = now - DENSITY_WINDOW_MS
+  return [...timestamps.filter(t => t > cutoff), now]
 }
 
 function reducer(state: ConversionState, action: Action): ConversionState {
   switch (action.type) {
     case 'REASONING': {
       const { text, phase } = action.payload
-      // Append to last reasoning entry if same phase, otherwise create new
+      const phaseChanged = phase !== state.phase
       const last = state.activities[state.activities.length - 1]
       if (last?.type === 'reasoning' && last.phase === phase) {
         const updated = [...state.activities]
@@ -85,7 +105,13 @@ function reducer(state: ConversionState, action: Action): ConversionState {
           ...last,
           text: (last.text || '') + text,
         }
-        return { ...state, phase, activities: updated }
+        return {
+          ...state,
+          phase,
+          activities: updated,
+          recentEventTimestamps: pushTimestamp(state.recentEventTimestamps),
+          lastPhaseChangeAt: phaseChanged ? Date.now() : state.lastPhaseChangeAt,
+        }
       }
       return {
         ...state,
@@ -100,12 +126,23 @@ function reducer(state: ConversionState, action: Action): ConversionState {
             phase,
           },
         ],
+        recentEventTimestamps: pushTimestamp(state.recentEventTimestamps),
+        lastPhaseChangeAt: phaseChanged ? Date.now() : state.lastPhaseChangeAt,
       }
     }
 
-    case 'TOOL_CALL':
+    case 'TOOL_CALL': {
+      const toolPhase = action.payload.phase || state.phase
+      const toolInput = action.payload.input as Record<string, unknown> | undefined
+      const itemId = String(
+        toolInput?.program_id || toolInput?.module_name || toolInput?.source_file || state.currentItemId || ''
+      )
+      const phaseChanged = toolPhase !== state.phase
       return {
         ...state,
+        phase: toolPhase,
+        currentTool: action.payload.tool,
+        currentItemId: itemId,
         activities: [
           ...state.activities,
           {
@@ -114,14 +151,19 @@ function reducer(state: ConversionState, action: Action): ConversionState {
             timestamp: Date.now(),
             tool: action.payload.tool,
             input: action.payload.input,
-            phase: state.phase,
+            phase: toolPhase,
           },
         ],
+        recentEventTimestamps: pushTimestamp(state.recentEventTimestamps),
+        lastPhaseChangeAt: phaseChanged ? Date.now() : state.lastPhaseChangeAt,
       }
+    }
 
-    case 'TOOL_RESULT':
+    case 'TOOL_RESULT': {
+      const resultPhase = action.payload.phase || state.phase
       return {
         ...state,
+        phase: resultPhase,
         activities: [
           ...state.activities,
           {
@@ -131,18 +173,24 @@ function reducer(state: ConversionState, action: Action): ConversionState {
             tool: action.payload.tool,
             output: action.payload.output,
             durationMs: action.payload.duration_ms,
-            phase: state.phase,
+            phase: resultPhase,
           },
         ],
       }
+    }
 
-    case 'PLAN_UPDATE':
+    case 'PLAN_UPDATE': {
+      const inProgressItem = action.payload.items.find(
+        (i: PlanItem) => i.status === 'in_progress'
+      )
       return {
         ...state,
         planId: action.payload.plan_id,
         planItems: action.payload.items,
         progressPct: action.payload.progress_pct,
+        currentItemId: inProgressItem?.program_id || inProgressItem?.id || state.currentItemId,
       }
+    }
 
     case 'SCORE':
       return {
@@ -178,6 +226,8 @@ function reducer(state: ConversionState, action: Action): ConversionState {
         ...state,
         completion: action.payload,
         isRunning: false,
+        currentTool: '',
+        currentItemId: '',
         activities: [
           ...state.activities,
           {
@@ -234,5 +284,7 @@ export function useConversionStore() {
     [],
   )
 
-  return { state, handleSSEEvent, reset, setRunning }
+  const eventDensity = state.recentEventTimestamps.length
+
+  return { state, handleSSEEvent, reset, setRunning, eventDensity }
 }

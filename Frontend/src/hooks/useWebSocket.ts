@@ -4,30 +4,34 @@ import type { SteeringAction, SteeringResponse } from '../types/events'
 interface UseWebSocketOptions {
   url: string
   onResponse?: (resp: SteeringResponse) => void
+  enabled?: boolean
 }
 
 /**
  * WebSocket hook for sending steering commands (FR-7).
  */
-export function useWebSocket({ url, onResponse }: UseWebSocketOptions) {
+export function useWebSocket({ url, onResponse, enabled = true }: UseWebSocketOptions) {
   const [connected, setConnected] = useState(false)
   const wsRef = useRef<WebSocket | null>(null)
   const onResponseRef = useRef(onResponse)
-  onResponseRef.current = onResponse
+
+  useEffect(() => { onResponseRef.current = onResponse }, [onResponse])
 
   useEffect(() => {
+    if (!enabled) {
+      if (wsRef.current) {
+        wsRef.current.close()
+        wsRef.current = null
+      }
+      return
+    }
+
     const ws = new WebSocket(url)
     wsRef.current = ws
 
     ws.onopen = () => setConnected(true)
     ws.onclose = () => {
       setConnected(false)
-      // Auto-reconnect after 2s
-      setTimeout(() => {
-        if (wsRef.current?.readyState === WebSocket.CLOSED) {
-          wsRef.current = new WebSocket(url)
-        }
-      }, 2000)
     }
     ws.onmessage = (e) => {
       try {
@@ -42,7 +46,7 @@ export function useWebSocket({ url, onResponse }: UseWebSocketOptions) {
       ws.close()
       wsRef.current = null
     }
-  }, [url])
+  }, [url, enabled])
 
   const send = useCallback((command: SteeringAction, itemId?: string) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {

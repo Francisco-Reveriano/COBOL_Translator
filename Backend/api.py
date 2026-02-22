@@ -131,25 +131,47 @@ app.add_middleware(
 @app.post("/api/v1/upload", response_model=UploadResponse)
 async def upload_files(files: list[UploadFile] = File(...)):
     """Upload COBOL source files to the input directory."""
-    input_dir = Path(settings.INPUT_DIR)
-    input_dir.mkdir(parents=True, exist_ok=True)
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided in upload request.")
 
-    saved_files = []
+    input_dir = Path(settings.INPUT_DIR)
+    try:
+        input_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.error(f"Cannot create input directory {input_dir}: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot create input directory ({input_dir}): {exc}",
+        )
+
+    saved_files: list[str] = []
     for f in files:
-        ext = Path(f.filename or "").suffix.lower()
+        safe_name = Path(f.filename or "").name
+        if not safe_name:
+            continue
+        ext = Path(safe_name).suffix.lower()
         if ext not in COBOL_EXTENSIONS:
             continue
-        dest = input_dir / f.filename
-        content = await f.read()
-        dest.write_bytes(content)
-        saved_files.append(f.filename)
+
+        dest = input_dir / safe_name
+        try:
+            content = await f.read()
+            dest.write_bytes(content)
+            saved_files.append(safe_name)
+        except Exception as exc:
+            logger.error(f"Failed to write {safe_name} to {dest}: {exc}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to save file '{safe_name}': {exc}",
+            )
 
     if not saved_files:
         raise HTTPException(
             status_code=400,
-            detail=f"No valid COBOL files uploaded. Accepted extensions: {COBOL_EXTENSIONS}",
+            detail=f"No valid COBOL files uploaded. Accepted extensions: {', '.join(sorted(COBOL_EXTENSIONS))}",
         )
 
+    logger.info(f"Uploaded {len(saved_files)} file(s) to {input_dir}: {saved_files}")
     return UploadResponse(
         files=saved_files,
         total_files=len(saved_files),
@@ -204,8 +226,23 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> N
             **payload,
         }
         event_bus.emit(event_type, enriched)
+
+        # Keep session state in sync for the REST status endpoint
+        if event_type == "plan_update":
+            progress = payload.get("progress_pct", 0)
+            items = payload.get("items", [])
+            current_item = next((i for i in items if i.get("status") == "in_progress"), None)
+            phase = current_item.get("phase", session.current_phase) if current_item else session.current_phase
+            item_id = current_item.get("id", "") if current_item else ""
+            session.update_progress(phase, item_id, progress)
+        elif event_type == "score":
+            session.scores.append(payload)
+
         # Also write to audit log (FR-8.8)
-        audit_log.log_event(event_type, enriched)
+        try:
+            audit_log.log_event(event_type, enriched)
+        except Exception as exc:
+            logger.warning(f"Audit log write failed (non-fatal): {exc}")
 
     def check_steering() -> dict:
         """Called from the agent thread to check steering flags."""

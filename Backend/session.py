@@ -30,6 +30,7 @@ class Session:
     session_id: str = ""
     status: SessionStatus = SessionStatus.IDLE
     start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
     current_phase: str = ""
     current_item_id: str = ""
     progress_pct: float = 0.0
@@ -59,6 +60,7 @@ class Session:
         self.session_id = uuid.uuid4().hex[:12]
         self.status = SessionStatus.RUNNING
         self.start_time = datetime.now()
+        self.end_time = None
         self.current_phase = "scan"
         self.current_item_id = ""
         self.progress_pct = 0.0
@@ -96,11 +98,13 @@ class Session:
     def complete(self) -> None:
         """Mark session as completed."""
         self.status = SessionStatus.COMPLETED
+        self.end_time = datetime.now()
         self.save_checkpoint()
 
     def fail(self) -> None:
         """Mark session as failed."""
         self.status = SessionStatus.FAILED
+        self.end_time = datetime.now()
         self.save_checkpoint()
 
     def update_progress(self, phase: str, item_id: str, progress_pct: float) -> None:
@@ -125,7 +129,8 @@ class Session:
 
     def elapsed_seconds(self) -> Optional[float]:
         if self.start_time:
-            return (datetime.now() - self.start_time).total_seconds()
+            end = self.end_time or datetime.now()
+            return (end - self.start_time).total_seconds()
         return None
 
     # ── Checkpoint persistence (FR-8.3) ──────────────────────────────

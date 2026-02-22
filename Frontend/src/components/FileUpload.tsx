@@ -1,4 +1,4 @@
-import { FolderUp, Upload } from 'lucide-react'
+import { AlertTriangle, FolderUp, Upload } from 'lucide-react'
 import { useCallback, useState } from 'react'
 
 interface FileUploadProps {
@@ -10,22 +10,40 @@ export function FileUpload({ onUploaded, disabled }: FileUploadProps) {
   const [dragging, setDragging] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
+  const [uploadError, setUploadError] = useState('')
 
   const uploadFiles = useCallback(
     async (fileList: FileList) => {
       setUploading(true)
+      setUploadError('')
       const formData = new FormData()
       for (const file of Array.from(fileList)) {
         formData.append('files', file)
       }
       try {
         const resp = await fetch('/api/v1/upload', { method: 'POST', body: formData })
-        if (!resp.ok) throw new Error(await resp.text())
+        if (!resp.ok) {
+          let message = `Upload failed (HTTP ${resp.status})`
+          try {
+            const contentType = resp.headers.get('content-type') || ''
+            if (contentType.includes('application/json')) {
+              const body = await resp.json()
+              message = body.detail || JSON.stringify(body)
+            } else {
+              const text = await resp.text()
+              if (text) message = text.slice(0, 300)
+            }
+          } catch { /* keep default message */ }
+          setUploadError(message)
+          return
+        }
         const data = await resp.json()
         setUploadedFiles(data.files)
+        setUploadError('')
         onUploaded(data.files)
       } catch (err) {
-        console.error('Upload failed:', err)
+        const msg = err instanceof Error ? err.message : 'Network error — is the backend running?'
+        setUploadError(msg)
       } finally {
         setUploading(false)
       }
@@ -81,32 +99,54 @@ export function FileUpload({ onUploaded, disabled }: FileUploadProps) {
   }
 
   return (
-    <label
-      onDragOver={e => { e.preventDefault(); setDragging(true) }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={handleDrop}
-      className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 cursor-pointer transition-colors"
-      style={{
-        borderColor: dragging ? 'var(--accent)' : 'var(--border-color)',
-        backgroundColor: dragging ? 'var(--bg-secondary)' : 'var(--bg-card)',
-        opacity: disabled ? 0.5 : 1,
-        pointerEvents: disabled ? 'none' : 'auto',
-      }}
-    >
-      <Upload size={32} style={{ color: 'var(--text-secondary)' }} />
-      <p className="mt-2 text-sm" style={{ color: 'var(--text-primary)' }}>
-        {uploading ? 'Uploading...' : 'Drop COBOL files here or click to browse'}
-      </p>
-      <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
-        .cbl, .cob, .cpy files accepted
-      </p>
-      <input
-        type="file"
-        multiple
-        accept=".cbl,.cob,.cpy,.cobol,.pco"
-        onChange={handleChange}
-        className="hidden"
-      />
-    </label>
+    <div className="w-full flex flex-col gap-2">
+      <label
+        onDragOver={e => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 cursor-pointer transition-colors"
+        style={{
+          borderColor: dragging ? 'var(--accent)' : uploadError ? 'var(--score-red)' : 'var(--border-color)',
+          backgroundColor: dragging ? 'var(--bg-secondary)' : 'var(--bg-card)',
+          opacity: disabled ? 0.5 : 1,
+          pointerEvents: disabled ? 'none' : 'auto',
+        }}
+      >
+        <Upload size={32} style={{ color: 'var(--text-secondary)' }} />
+        <p className="mt-2 text-sm" style={{ color: 'var(--text-primary)' }}>
+          {uploading ? 'Uploading...' : 'Drop COBOL files here or click to browse'}
+        </p>
+        <p className="text-xs mt-1" style={{ color: 'var(--text-secondary)' }}>
+          .cbl, .cob, .cpy files accepted
+        </p>
+        <input
+          type="file"
+          multiple
+          accept=".cbl,.cob,.cpy,.cobol,.pco"
+          onChange={handleChange}
+          className="hidden"
+        />
+      </label>
+
+      {uploadError && (
+        <div
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs anim-shake"
+          style={{
+            backgroundColor: 'var(--bg-card)',
+            border: '1px solid var(--score-red)',
+            color: 'var(--score-red)',
+          }}
+        >
+          <AlertTriangle size={14} style={{ flexShrink: 0 }} />
+          <span className="flex-1">{uploadError}</span>
+          <button
+            onClick={() => setUploadError('')}
+            style={{ background: 'none', border: 'none', color: 'var(--score-red)', cursor: 'pointer', fontSize: 14 }}
+          >
+            &times;
+          </button>
+        </div>
+      )}
+    </div>
   )
 }

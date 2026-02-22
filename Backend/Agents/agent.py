@@ -38,7 +38,7 @@ from strands.models.anthropic import AnthropicModel
 
 from Tools.cobol_scanner import cobol_scanner
 from Tools.conversion_planner import conversion_planner
-from Tools.cobol_converter import cobol_converter
+from Tools.cobol_converter import cobol_converter, cobol_refiner
 from Tools.plan_tracker import plan_tracker
 from Tools.validation_checker import validation_checker
 from Tools.quality_scorer import quality_scorer
@@ -81,12 +81,15 @@ class CLIStreamHandler:
     def __init__(self) -> None:
         self.current_tool: Optional[str] = None
 
-    def __call__(self, event: dict) -> None:
-        if "data" in event:
-            print(event["data"], end="", flush=True)
+    def __call__(self, **kwargs: Any) -> None:
+        if "init_event_loop" in kwargs or "result" in kwargs:
+            return
 
-        if "current_tool_use" in event:
-            tool = event["current_tool_use"]
+        if "data" in kwargs:
+            print(kwargs["data"], end="", flush=True)
+
+        if "current_tool_use" in kwargs:
+            tool = kwargs["current_tool_use"]
             tool_name = tool.get("name", "unknown")
             if tool_name != self.current_tool:
                 self.current_tool = tool_name
@@ -94,8 +97,8 @@ class CLIStreamHandler:
                 print(f"  Tool: {tool_name}")
                 print(f"{'─'*60}")
 
-        if "message" in event and event["message"].get("role") == "assistant":
-            stop = event["message"].get("stop_reason")
+        if "message" in kwargs and kwargs["message"].get("role") == "assistant":
+            stop = kwargs["message"].get("stop_reason")
             if stop == "end_turn":
                 print("\nAgent turn complete.\n")
 
@@ -110,19 +113,22 @@ class SSEStreamHandler:
         self._reasoning_counter = 0
         self._current_phase = "scan"
 
-    def __call__(self, event: dict) -> None:
+    def __call__(self, **kwargs: Any) -> None:
+        if "init_event_loop" in kwargs or "result" in kwargs:
+            return
+
         # Reasoning text chunks
-        if "data" in event:
+        if "data" in kwargs:
             self._reasoning_counter += 1
             self.event_callback("reasoning", {
                 "id": self._reasoning_counter,
-                "text": event["data"],
+                "text": kwargs["data"],
                 "phase": self._current_phase,
             })
 
         # Tool call start
-        if "current_tool_use" in event:
-            tool = event["current_tool_use"]
+        if "current_tool_use" in kwargs:
+            tool = kwargs["current_tool_use"]
             tool_name = tool.get("name", "unknown")
             if tool_name != self.current_tool:
                 # Emit tool_result for previous tool if applicable
@@ -133,6 +139,7 @@ class SSEStreamHandler:
                         "tool": self.current_tool,
                         "output": {},
                         "duration_ms": duration_ms,
+                        "phase": self._current_phase,
                     })
 
                 self.current_tool = tool_name
@@ -143,11 +150,12 @@ class SSEStreamHandler:
                     "id": tool.get("toolUseId", tool_name),
                     "tool": tool_name,
                     "input": tool.get("input", {}),
+                    "phase": self._current_phase,
                 })
 
         # Turn complete
-        if "message" in event and event["message"].get("role") == "assistant":
-            stop = event["message"].get("stop_reason")
+        if "message" in kwargs and kwargs["message"].get("role") == "assistant":
+            stop = kwargs["message"].get("stop_reason")
             if stop == "end_turn":
                 # Emit final tool_result if a tool was running
                 if self.current_tool and self.tool_start_time:
@@ -157,6 +165,7 @@ class SSEStreamHandler:
                         "tool": self.current_tool,
                         "output": {},
                         "duration_ms": duration_ms,
+                        "phase": self._current_phase,
                     })
                     self.current_tool = None
 
@@ -166,7 +175,8 @@ class SSEStreamHandler:
             "cobol_scanner": "scan",
             "conversion_planner": "plan",
             "cobol_converter": "convert",
-            "plan_tracker": self._current_phase,  # stays in current
+            "cobol_refiner": "convert",
+            "plan_tracker": self._current_phase,
             "validation_checker": "validate",
             "quality_scorer": "score",
         }
@@ -207,6 +217,7 @@ def create_agent(
             cobol_scanner,
             conversion_planner,
             cobol_converter,
+            cobol_refiner,
             plan_tracker,
             validation_checker,
             quality_scorer,
@@ -229,7 +240,13 @@ You are starting a COBOL-to-Python migration. Follow these steps exactly:
    a. Use `plan_tracker` to set status to "in_progress"
    b. Use `cobol_converter` to convert it
    c. Use `quality_scorer` to score the conversion (pass the COBOL source and Python output)
-   d. Mark the item "completed" with `plan_tracker`
+   d. REFINEMENT LOOP — target score >= 95.0, max 3 attempts:
+      If the overall score is below 95.0 and you have fewer than 3 refinement attempts:
+        i.   Use `cobol_refiner` with the score_result to get issues and fix instructions
+        ii.  Generate an improved Python module addressing every issue
+        iii. Re-score with `quality_scorer` using the improved output
+        iv.  Repeat until score >= 95.0 or 3 attempts exhausted
+   e. Mark the item "completed" with `plan_tracker`
 4. After all conversions, use `validation_checker` to verify the output
 5. Provide a final migration summary report including all quality scores
 
@@ -259,6 +276,15 @@ def run_conversion(
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    # Wire SSE event callbacks into tool modules so they emit live updates
+    if event_callback:
+        from Tools.plan_tracker import set_event_callback as set_plan_cb
+        from Tools.quality_scorer import set_event_callback as set_score_cb
+        from Tools.conversion_planner import set_event_callback as set_planner_cb
+        set_plan_cb(event_callback)
+        set_score_cb(event_callback)
+        set_planner_cb(event_callback)
 
     agent = create_agent(event_callback=event_callback)
     prompt = build_conversion_prompt(cobol_dir)

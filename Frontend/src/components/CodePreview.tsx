@@ -36,7 +36,8 @@ interface FileContent {
 }
 
 export function CodePreview({ theme, selectedFile }: CodePreviewProps) {
-  const [MonacoEditor, setMonacoEditor] = useState<React.ComponentType<any> | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Monaco's editor props are untyped in the lazy import
+  const [MonacoEditor, setMonacoEditor] = useState<React.ComponentType<Record<string, any>> | null>(null)
   const [files, setFiles] = useState<FileList>({ cobol: [], python: [] })
   const [activeFile, setActiveFile] = useState<FileContent | null>(null)
   const [loading, setLoading] = useState(false)
@@ -173,6 +174,7 @@ export function CodePreview({ theme, selectedFile }: CodePreviewProps) {
             value={activeFile?.content || '# Select a file from the dropdown above\n'}
             options={{
               readOnly: true,
+              automaticLayout: true,
               minimap: { enabled: true },
               fontSize: 13,
               wordWrap: 'on',

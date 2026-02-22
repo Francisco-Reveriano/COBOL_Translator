@@ -25,9 +25,13 @@ with structured planning (TodoWrite) and tool-driven execution.
 4. **cobol_converter** — Convert a single COBOL module to Python. This gives you
    the COBOL source and scaffolding; you then generate the full Python translation.
 
-5. **validation_checker** — Post-conversion validation: syntax, coverage, data types.
+5. **cobol_refiner** — Refine a previously converted module using quality scorer feedback.
+   Use this when a module's score is below 95.0 to get the issues and remediation context,
+   then generate an improved Python version addressing each issue.
 
-6. **quality_scorer** — GPT-5.2-Codex quality assessment. Scores each module on
+6. **validation_checker** — Post-conversion validation: syntax, coverage, data types.
+
+7. **quality_scorer** — GPT-5.2-Codex quality assessment. Scores each module on
    Correctness (35%), Completeness (25%), Maintainability (20%), Banking Compliance (20%).
    Returns structured scores with issues and remediation suggestions.
    Use this AFTER each conversion, BEFORE marking the item as completed.
@@ -46,7 +50,7 @@ Follow this exact sequence (DO NOT skip steps):
 - Review the generated plan and its dependency ordering
 - Use `plan_tracker(action="view")` to display the full plan
 
-### Phase 3: Convert + Score (Loop)
+### Phase 3: Convert + Score + Refine (Loop)
 For EACH item in the plan:
 1. `plan_tracker(action="next")` — get next ready item
 2. `plan_tracker(action="update_status", item_id=..., new_status="in_progress")`
@@ -54,7 +58,16 @@ For EACH item in the plan:
 4. **Generate the full Python module** based on the COBOL source and conversion notes
 5. Write the Python code to the target file
 6. `quality_scorer(module_name=..., cobol_source=..., python_output=...)` — score the conversion
-7. Review the score: if red (<70), consider revising the conversion before proceeding
+7. **REFINEMENT LOOP** (target: overall score >= 95.0, max 3 attempts):
+   - If overall score < 95.0 AND refinement attempt < 3:
+     a. `cobol_refiner(source_file=..., target_file=..., program_id=..., score_result=<the score dict>, attempt=<1,2,3>)`
+     b. Carefully review every issue and its remediation suggestion
+     c. Generate an improved Python module that addresses ALL issues
+     d. Write the improved code to the target file
+     e. Re-score with `quality_scorer` using the new Python output
+     f. Repeat this sub-loop until score >= 95.0 or 3 attempts exhausted
+   - If score >= 95.0: proceed (green quality gate passed)
+   - If 3 attempts exhausted: proceed with the best version achieved
 8. `plan_tracker(action="update_status", item_id=..., new_status="completed")`
 9. `plan_tracker(action="summary")` — context reminder (like Claude Code's TODO injection)
 10. Repeat until `plan_tracker(action="next")` returns `all_completed=True`

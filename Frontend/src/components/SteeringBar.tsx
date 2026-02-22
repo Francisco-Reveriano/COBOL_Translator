@@ -1,49 +1,57 @@
-import { Pause, Play, RotateCcw, SkipForward } from 'lucide-react'
+import { Pause, Play, RotateCcw, SkipForward, Trash2 } from 'lucide-react'
 import type { SessionStatus, SteeringAction } from '../types/events'
 
 interface SteeringBarProps {
   status: SessionStatus
   onCommand: (action: SteeringAction) => void
+  onClear?: () => void
 }
 
-export function SteeringBar({ status, onCommand }: SteeringBarProps) {
+export function SteeringBar({ status, onCommand, onClear }: SteeringBarProps) {
   const isRunning = status === 'running'
   const isPaused = status === 'paused'
   const isActive = isRunning || isPaused
 
-  if (!isActive) return null
-
   return (
     <div className="flex items-center gap-2 px-4 py-2">
-      {/* Pause / Resume toggle (FR-7.5) */}
-      {isRunning ? (
-        <SteerButton
-          icon={<Pause size={14} />}
-          label="Pause"
-          onClick={() => onCommand('PAUSE')}
-        />
-      ) : (
-        <SteerButton
-          icon={<Play size={14} />}
-          label="Resume"
-          onClick={() => onCommand('RESUME')}
-          accent
-        />
+      {isActive && (
+        <>
+          {isRunning ? (
+            <SteerButton
+              icon={<Pause size={14} />}
+              label="Pause"
+              onClick={() => onCommand('PAUSE')}
+            />
+          ) : (
+            <SteerButton
+              icon={<Play size={14} />}
+              label="Resume"
+              onClick={() => onCommand('RESUME')}
+              accent
+            />
+          )}
+
+          <SteerButton
+            icon={<SkipForward size={14} />}
+            label="Skip"
+            onClick={() => onCommand('SKIP')}
+          />
+
+          <SteerButton
+            icon={<RotateCcw size={14} />}
+            label="Retry"
+            onClick={() => onCommand('RETRY')}
+          />
+        </>
       )}
 
-      {/* Skip (FR-7.3) */}
-      <SteerButton
-        icon={<SkipForward size={14} />}
-        label="Skip"
-        onClick={() => onCommand('SKIP')}
-      />
-
-      {/* Retry (FR-7.4) */}
-      <SteerButton
-        icon={<RotateCcw size={14} />}
-        label="Retry"
-        onClick={() => onCommand('RETRY')}
-      />
+      {onClear && (
+        <SteerButton
+          icon={<Trash2 size={14} />}
+          label="Clear"
+          onClick={onClear}
+        />
+      )}
     </div>
   )
 }

@@ -15,10 +15,23 @@ ensuring COPY books and shared modules are converted first.
 
 import json
 import hashlib
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
+
+logger = logging.getLogger(__name__)
+
+# Module-level SSE event callback (set by agent factory)
+_event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None
+
+
+def set_event_callback(cb: Optional[Callable[[str, dict[str, Any]], None]]) -> None:
+    """Wire the SSE event callback from the agent factory."""
+    global _event_callback
+    _event_callback = cb
 
 
 # ---------------------------------------------------------------------------
@@ -192,7 +205,7 @@ def conversion_planner(scan_results: dict, output_dir: str = "./output") -> dict
     dep_graph = scan_results.get("dependency_graph", {"nodes": [], "edges": []})
 
     if not programs:
-        return {"error": "No programs found in scan results"}
+        return strands_result({"error": "No programs found in scan results"}, status="error")
 
     # Determine conversion order via topological sort
     conversion_order = _determine_conversion_order(programs, dep_graph)
@@ -358,4 +371,50 @@ def conversion_planner(scan_results: dict, output_dir: str = "./output") -> dict
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(json.dumps(plan, indent=2, default=str))
 
-    return plan
+    # Emit initial flowchart and plan_update SSE events
+    if _event_callback:
+        try:
+            _event_callback("flowchart", {
+                "nodes": [
+                    {
+                        "id": n["id"],
+                        "label": n["id"],
+                        "type": "program",
+                        "status": "pending",
+                        "complexity": n.get("complexity", ""),
+                        "loc": n.get("loc", 0),
+                        "has_sql": False,
+                        "has_cics": False,
+                        "source_file": n.get("file", ""),
+                    }
+                    for n in dep_graph.get("nodes", [])
+                ],
+                "edges": [
+                    {
+                        "id": f"e{i}",
+                        "source": e.get("from", ""),
+                        "target": e.get("to", ""),
+                        "type": e.get("type", "CALL"),
+                    }
+                    for i, e in enumerate(dep_graph.get("edges", []))
+                ],
+            })
+            _event_callback("plan_update", {
+                "plan_id": plan_id,
+                "items": [
+                    {
+                        "id": item["id"],
+                        "title": item["title"],
+                        "status": item["status"],
+                        "phase": item["phase"],
+                        "program_id": item["program_id"],
+                        "complexity": item.get("complexity", ""),
+                    }
+                    for item in plan_items
+                ],
+                "progress_pct": 0.0,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to emit planner events: {e}")
+
+    return strands_result(plan)

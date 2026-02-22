@@ -64,9 +64,23 @@
   --accent-primary: #00A9F4;
 }
 
+/* ── Motion tokens ────────────────────────────────────────────── */
+:root {
+  --motion-micro: 120ms;
+  --motion-fast: 200ms;
+  --motion-medium: 400ms;
+  --motion-slow: 600ms;
+  --motion-page: 800ms;
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 /* ── Base styles ───────────────────────────────────────────────── */
 * {
-  transition: background-color 200ms ease, color 200ms ease, border-color 200ms ease;
+  transition: background-color var(--motion-fast) var(--ease-smooth),
+              color var(--motion-fast) var(--ease-smooth),
+              border-color var(--motion-fast) var(--ease-smooth);
 }
 
 html {
@@ -149,6 +163,138 @@ body {
 }
 .score-ring-animate {
   animation: score-ring 1s ease-out;
+}
+
+/* ── Semantic motion keyframes ────────────────────────────────── */
+
+/* Progress: left-to-right sweep */
+@keyframes sweep-right {
+  from { transform: translateX(-8px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.anim-sweep-right {
+  animation: sweep-right var(--motion-fast) var(--ease-out-expo) both;
+}
+
+/* Waiting: breathing pulse */
+@keyframes breathe {
+  0%, 100% { opacity: 0.5; transform: scale(0.95); }
+  50%      { opacity: 1;   transform: scale(1);     }
+}
+.anim-breathe {
+  animation: breathe 2.4s var(--ease-smooth) infinite;
+}
+
+/* Error: horizontal shake */
+@keyframes shake-x {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-4px); }
+  40%      { transform: translateX(4px); }
+  60%      { transform: translateX(-3px); }
+  80%      { transform: translateX(2px); }
+}
+.anim-shake {
+  animation: shake-x var(--motion-medium) var(--ease-smooth);
+}
+
+/* Success: brief green flash trail */
+@keyframes success-flash {
+  0%   { box-shadow: 0 0 0 0 var(--score-green); }
+  40%  { box-shadow: 0 0 12px 2px var(--score-green); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.anim-success {
+  animation: success-flash var(--motion-slow) var(--ease-out-expo);
+}
+
+/* Slide-in from top (for stage separators, banners) */
+@keyframes slide-in-top {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);     opacity: 1; }
+}
+.anim-slide-in-top {
+  animation: slide-in-top var(--motion-medium) var(--ease-out-expo) both;
+}
+
+/* Slide-in from bottom */
+@keyframes slide-in-bottom {
+  from { transform: translateY(12px); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+.anim-slide-in-bottom {
+  animation: slide-in-bottom var(--motion-fast) var(--ease-out-expo) both;
+}
+
+/* Fade-scale pop (for badges, chips) */
+@keyframes pop-in {
+  from { transform: scale(0.7); opacity: 0; }
+  to   { transform: scale(1);   opacity: 1; }
+}
+.anim-pop-in {
+  animation: pop-in var(--motion-fast) var(--ease-spring) both;
+}
+
+/* Stage handoff: outgoing node shrink */
+@keyframes stage-exit {
+  from { transform: scale(1);    opacity: 1; }
+  to   { transform: scale(0.92); opacity: 0.6; }
+}
+
+/* Stage handoff: incoming node expand */
+@keyframes stage-enter {
+  from { transform: scale(0.92); opacity: 0.6; }
+  to   { transform: scale(1);    opacity: 1; }
+}
+
+/* Marquee ticker for exec strip */
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+/* Edge particle travel */
+@keyframes particle-travel {
+  0%   { offset-distance: 0%;   opacity: 0; }
+  10%  { opacity: 1; }
+  90%  { opacity: 1; }
+  100% { offset-distance: 100%; opacity: 0; }
+}
+
+/* Layout panel transition */
+.panel-transition {
+  transition: flex-basis var(--motion-medium) var(--ease-out-expo),
+              width var(--motion-medium) var(--ease-out-expo),
+              opacity var(--motion-fast) var(--ease-smooth);
+}
+
+/* Reduced motion: respect user preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Pane splitter ─────────────────────────────────────────── */
+.pane-splitter {
+  width: 5px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: var(--border-color);
+  position: relative;
+  z-index: 5;
+  transition: background var(--motion-fast) var(--ease-smooth),
+              box-shadow var(--motion-fast) var(--ease-smooth);
+}
+.pane-splitter:hover,
+.pane-splitter:active {
+  background: var(--accent-primary);
+  box-shadow: 0 0 6px var(--accent-primary);
+}
+.pane-splitter:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -1px;
 }
 
 /* ── React Flow overrides ────────────────────────────────────── */

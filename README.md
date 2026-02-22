@@ -5,32 +5,35 @@ A full-stack agentic COBOL-to-Python migration system powered by [Strands Agents
 ## Architecture
 
 ```
-┌─────────────┐     SSE      ┌───────────────────────────────────────────┐
-│   React UI  │◄────────────►│  FastAPI Backend (localhost:8000)         │
-│  (Vite dev) │   WebSocket  │                                           │
-│  :5173      │──────────────│  ┌─────────────────────────────────────┐  │
-└─────────────┘              │  │  Strands Agent (Claude)             │  │
-                             │  │  ┌──────┐ ┌──────┐ ┌─────────────┐│  │
-                             │  │  │Scan  │→│Plan  │→│Convert+Score││  │
-                             │  │  └──────┘ └──────┘ └─────────────┘│  │
-                             │  │  ┌──────────┐ ┌────────┐          │  │
-                             │  │  │Validate  │→│Report  │          │  │
-                             │  │  └──────────┘ └────────┘          │  │
-                             │  └─────────────────────────────────────┘  │
-                             │  GPT-5.2-Codex ◄── Quality Scoring       │
-                             └───────────────────────────────────────────┘
+┌─────────────┐     SSE      ┌───────────────────────────────────────────────┐
+│   React UI  │◄────────────►│  FastAPI Backend (localhost:8000)             │
+│  (Vite dev) │   WebSocket  │                                               │
+│  :5173      │──────────────│  ┌─────────────────────────────────────────┐  │
+└─────────────┘              │  │  Strands Agent (Claude)                 │  │
+                             │  │                                         │  │
+                             │  │  ┌──────┐ ┌──────┐ ┌─────────────────┐ │  │
+                             │  │  │Scan  │→│Plan  │→│Convert → Refine │ │  │
+                             │  │  └──────┘ └──────┘ └────────┬────────┘ │  │
+                             │  │                             ↓          │  │
+                             │  │  ┌──────────┐ ┌────────┐ ┌──────┐     │  │
+                             │  │  │Validate  │→│Report  │ │Score │     │  │
+                             │  │  └──────────┘ └────────┘ └──────┘     │  │
+                             │  └─────────────────────────────────────────┘  │
+                             │  GPT-5.2-Codex ◄── Quality Scoring           │
+                             └───────────────────────────────────────────────┘
 ```
 
-### 6-Phase Pipeline
+### 7-Tool Pipeline
 
 | Phase | Tool | Description |
 |-------|------|-------------|
-| Scan | `cobol_scanner` | Analyze COBOL files, extract structure and dependencies |
-| Plan | `conversion_planner` | Generate dependency-ordered conversion plan (TodoWrite pattern) |
-| Convert | `cobol_converter` | Loop through plan items, converting COBOL to Python |
-| Score | `quality_scorer` | GPT-5.2-Codex evaluates each module on 4 dimensions |
-| Validate | `validation_checker` | Syntax, structural coverage, data type mapping checks |
-| Report | Final summary | Migration report with all quality scores |
+| 1. Scan | `cobol_scanner` | Analyze COBOL files, extract structure and dependencies |
+| 2. Plan | `conversion_planner` | Generate dependency-ordered conversion plan (TodoWrite pattern) |
+| 3. Track | `plan_tracker` | Manage plan state: view, update status, check deps, next item |
+| 4. Convert | `cobol_converter` | Loop through plan items, converting COBOL to Python |
+| 5. Refine | `cobol_refiner` | Iterative quality improvement loop on converted output |
+| 6. Score | `quality_scorer` | GPT-5.2-Codex evaluates each module on 4 dimensions |
+| 7. Validate | `validation_checker` | Syntax, structural coverage, data type mapping, test stubs |
 
 ### Quality Scoring Rubric
 
@@ -42,6 +45,47 @@ A full-stack agentic COBOL-to-Python migration system powered by [Strands Agents
 | Banking Compliance | 20% | Decimal precision, error handling, audit readiness |
 
 Thresholds: Green >= 85, Yellow 70-84, Red < 70
+
+### Agent Communication Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  Strands Agent (thread pool)                                            │
+│                                                                         │
+│  tool fn() ──► return strands_result({...})                             │
+│                  │                                                       │
+│                  ▼  {"status":"success","content":[{"text":"..."}]}      │
+│             SSEStreamHandler callback                                    │
+│                  │                                                       │
+│                  ▼                                                       │
+│             emit() closure (api.py)                                      │
+│                  ├──► event_bus.emit()       ← thread-safe, wakes loop  │
+│                  │         │                                             │
+│                  │         ▼                                             │
+│                  │    EventBus.stream()      ← async generator          │
+│                  │         │                                             │
+│                  │         ▼                                             │
+│                  │    SSE to browser         ← GET /api/v1/convert/stream│
+│                  │         │                                             │
+│                  │         ▼                                             │
+│                  │    useSSE.ts → conversionStore reducer → React render │
+│                  │                                                       │
+│                  └──► audit_log.log_event()  ← try/except, non-fatal    │
+│                            │                                             │
+│                            ▼                                             │
+│                       JSONL file (session log)                           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Resilience Architecture
+
+Three safety layers prevent tool-return serialization crashes from killing a conversion mid-flight:
+
+| Layer | Location | Protection |
+|-------|----------|------------|
+| **Layer 1 — `strands_result()` envelope** | `tool_helpers.py` → every `@tool` return | Wraps all tool return dicts in `{"status", "content": [{"text": json.dumps(...)}]}` so the Strands SDK never falls back to `str()` serialization |
+| **Layer 2 — Defensive `audit_log`** | `audit_log.py` → `_truncate_dict()` | Accepts `Any` (not just `dict`), handles stringified JSON and non-dict payloads gracefully before writing to the JSONL audit trail |
+| **Layer 3 — `try/except` in `emit()`** | `api.py` → `emit()` closure | Catches any exception from `audit_log.log_event()` so a logging failure never propagates back to the Strands agent thread |
 
 ## Project Structure
 
@@ -59,10 +103,11 @@ Code_Translation/
 │       ├── Prompts/
 │       │   └── system_prompts.py # Agent system prompt
 │       └── Tools/
+│           ├── tool_helpers.py       # strands_result() envelope helper
 │           ├── cobol_scanner.py      # COBOL file analysis
 │           ├── conversion_planner.py # Plan generation
-│           ├── cobol_converter.py    # COBOL-to-Python scaffolding
-│           ├── plan_tracker.py       # Plan state management
+│           ├── cobol_converter.py    # COBOL→Python + cobol_refiner loop
+│           ├── plan_tracker.py       # Plan state management (TodoWrite)
 │           ├── validation_checker.py # Output validation + test stubs
 │           └── quality_scorer.py     # GPT-5.2-Codex integration
 ├── Frontend/
@@ -152,7 +197,7 @@ python Backend/Agents/agent.py ./Data --output ./output
 ### Web UI Workflow
 
 1. **Upload** — Drag-and-drop `.cbl/.cob/.cpy` files or use the file picker
-2. **Convert** — Click "Start Conversion" to begin the 6-phase pipeline
+2. **Convert** — Click "Start Conversion" to begin the 7-tool pipeline
 3. **Monitor** — Watch the streaming activity panel, step timeline, and dependency graph
 4. **Steer** — Use Pause/Resume/Skip/Retry buttons during conversion
 5. **Review** — Browse converted files in the Monaco editor, compare in Diff View

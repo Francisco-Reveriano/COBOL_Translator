@@ -20,6 +20,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +179,11 @@ def cobol_converter(
 
     # Read COBOL source
     if not source_path.exists():
-        return {
+        return strands_result({
             "success": False,
             "error": f"Source file not found: {source_file}",
             "plan_item_id": plan_item_id,
-        }
+        }, status="error")
 
     cobol_source = source_path.read_text(encoding="utf-8", errors="replace")
 
@@ -273,7 +274,7 @@ def cobol_converter(
 """
     target_path.write_text(placeholder)
 
-    return {
+    return strands_result({
         "success": True,
         "plan_item_id": plan_item_id,
         "program_id": program_id,
@@ -288,4 +289,94 @@ def cobol_converter(
             f"conversion_context provided. Write the complete Python module "
             f"that faithfully translates the COBOL logic, then save it to {target_file}."
         ),
-    }
+    })
+
+
+# ---------------------------------------------------------------------------
+# Refinement Tool — iterates on scored output until quality >= 95
+# ---------------------------------------------------------------------------
+@tool
+def cobol_refiner(
+    source_file: str,
+    target_file: str,
+    program_id: str,
+    score_result: dict,
+    attempt: int,
+    output_dir: str = "./output",
+) -> dict:
+    """
+    Refine a previously converted Python module using quality scorer feedback.
+
+    Called when a module's quality score is below 95.0. Reads the current
+    Python output and the original COBOL source, then provides the scorer's
+    issues and remediation suggestions as structured context so the agent
+    can generate an improved version.
+
+    Args:
+        source_file: Path to the original COBOL source file.
+        target_file: Path to the current Python output to improve.
+        program_id: COBOL PROGRAM-ID for the module being refined.
+        score_result: The quality_scorer result dict containing 'scores',
+                      'overall', 'issues', and 'summary'.
+        attempt: Current refinement attempt number (1-based, max 3).
+        output_dir: Base output directory.
+
+    Returns:
+        Dict with the COBOL source, current Python code, and formatted
+        fix instructions for the agent to generate an improved version.
+    """
+    source_path = Path(source_file)
+    target_path = Path(target_file)
+
+    if not source_path.exists():
+        return strands_result({
+            "error": f"COBOL source not found: {source_file}",
+        }, status="error")
+
+    cobol_source = source_path.read_text(encoding="utf-8", errors="replace")
+
+    current_python = ""
+    if target_path.exists():
+        current_python = target_path.read_text(encoding="utf-8", errors="replace")
+
+    overall = score_result.get("overall", 0)
+    scores = score_result.get("scores", {})
+    issues = score_result.get("issues", [])
+    summary = score_result.get("summary", "")
+
+    fix_instructions = []
+    for i, issue in enumerate(issues, 1):
+        severity = issue.get("severity", "info")
+        dimension = issue.get("dimension", "")
+        description = issue.get("description", "")
+        line = issue.get("line")
+        remediation = issue.get("remediation", "")
+        line_ref = f" (line {line})" if line else ""
+        fix_instructions.append(
+            f"{i}. [{severity.upper()}] {dimension}{line_ref}: {description}\n"
+            f"   Fix: {remediation}"
+        )
+
+    return strands_result({
+        "program_id": program_id,
+        "attempt": attempt,
+        "max_attempts": 3,
+        "current_overall_score": overall,
+        "target_score": 95.0,
+        "score_gap": round(95.0 - overall, 1),
+        "dimension_scores": scores,
+        "scorer_summary": summary,
+        "cobol_source": cobol_source,
+        "current_python_output": current_python,
+        "fix_instructions": "\n".join(fix_instructions),
+        "issue_count": len(issues),
+        "message": (
+            f"Refinement attempt {attempt}/3 for {program_id}. "
+            f"Current score: {overall} (target: 95.0, gap: {round(95.0 - overall, 1)}). "
+            f"{len(issues)} issues to address. "
+            f"Please carefully review each issue below, apply the suggested fixes "
+            f"to the Python code, and generate a complete improved version. "
+            f"Focus on the highest-severity issues first. "
+            f"Write the improved module to {target_file}."
+        ),
+    })

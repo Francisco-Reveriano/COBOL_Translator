@@ -10,10 +10,13 @@ from typing import Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Project root: one level above Backend/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_PROJECT_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -33,6 +36,19 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
+    def resolve_paths(self) -> None:
+        """Resolve relative paths to absolute using project root as anchor."""
+        input_path = Path(self.INPUT_DIR)
+        output_path = Path(self.OUTPUT_DIR)
+
+        if not input_path.is_absolute():
+            input_path = _PROJECT_ROOT / input_path
+        if not output_path.is_absolute():
+            output_path = _PROJECT_ROOT / output_path
+
+        self.INPUT_DIR = str(input_path.resolve())
+        self.OUTPUT_DIR = str(output_path.resolve())
+
     def validate_directories(self) -> None:
         """Ensure input and output directories exist."""
         Path(self.INPUT_DIR).mkdir(parents=True, exist_ok=True)
@@ -51,5 +67,6 @@ def get_settings() -> Settings:
             f"  OPENAI_API_KEY=sk-proj-...\n\n"
             f"Detail: {e}"
         )
+    settings.resolve_paths()
     settings.validate_directories()
     return settings

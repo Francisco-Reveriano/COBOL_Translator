@@ -24,7 +24,8 @@ interface FileList {
 }
 
 export function DiffView({ theme }: DiffViewProps) {
-  const [DiffEditor, setDiffEditor] = useState<React.ComponentType<any> | null>(null)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Monaco's DiffEditor props are untyped in the lazy import
+  const [DiffEditor, setDiffEditor] = useState<React.ComponentType<Record<string, any>> | null>(null)
   const [files, setFiles] = useState<FileList>({ cobol: [], python: [] })
   const [cobolContent, setCobolContent] = useState<string>('')
   const [pythonContent, setPythonContent] = useState<string>('')
@@ -141,18 +142,27 @@ export function DiffView({ theme }: DiffViewProps) {
         ) : (
           <DiffEditor
             height="100%"
-            language="python"
+            language="plaintext"
             theme={theme === 'dark' ? 'vs-dark' : 'vs'}
             original={cobolContent || '      * COBOL source will appear here\n'}
             modified={pythonContent || '# Python output will appear here\n'}
             options={{
               readOnly: true,
+              automaticLayout: true,
               renderSideBySide: true,
+              useInlineViewWhenSpaceIsLimited: true,
+              renderSideBySideInlineBreakpoint: 700,
               minimap: { enabled: false },
               fontSize: 13,
               wordWrap: 'on',
               scrollBeyondLastLine: false,
               originalEditable: false,
+              overviewRulerLanes: 1,
+              scrollbar: {
+                alwaysConsumeMouseWheel: false,
+                verticalScrollbarSize: 8,
+                horizontalScrollbarSize: 8,
+              },
             }}
           />
         )}

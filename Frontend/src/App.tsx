@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTheme } from './hooks/useTheme'
 import { useSSE } from './hooks/useSSE'
 import { useWebSocket } from './hooks/useWebSocket'
@@ -22,27 +22,107 @@ import type { SessionStatus, SteeringAction, SteeringResponse } from './types/ev
 
 type CenterTab = 'stream' | 'graph'
 type RightTab = 'code' | 'diff'
+type LayoutFocus = 'balanced' | 'stream' | 'code'
 
 export default function App() {
   const { theme, toggle: toggleTheme } = useTheme()
-  const { state, handleSSEEvent, reset, setRunning } = useConversionStore()
+  const { state, handleSSEEvent, reset, setRunning, eventDensity } = useConversionStore()
 
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
+  const [errorMessage, setErrorMessage] = useState('')
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
   const [centerTab, setCenterTab] = useState<CenterTab>('stream')
   const [rightTab, setRightTab] = useState<RightTab>('code')
+  const [layoutFocus, setLayoutFocus] = useState<LayoutFocus>('balanced')
+  const manualFocusRef = useRef(false)
+
+  const RIGHT_MIN = 320
+  const RIGHT_MAX = 900
+  const presetWidth = (f: LayoutFocus) => f === 'code' ? 640 : f === 'stream' ? 360 : 480
+  const [rightPaneWidth, setRightPaneWidth] = useState(presetWidth('balanced'))
+  const manualResizeRef = useRef(false)
+  const isDraggingRef = useRef(false)
+
+  // Auto-adjust layout focus based on event density (deferred to avoid cascading render)
+  useEffect(() => {
+    if (manualFocusRef.current) return
+    if (!state.isRunning) return
+    const t = setTimeout(() => {
+      const next: LayoutFocus = eventDensity > 8 ? 'stream' : 'balanced'
+      setLayoutFocus(next)
+      if (!manualResizeRef.current) {
+        setRightPaneWidth(presetWidth(next))
+      }
+    }, 0)
+    return () => clearTimeout(t)
+  }, [eventDensity, state.isRunning])
+
+  // Splitter drag handlers
+  const handleSplitterMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    isDraggingRef.current = true
+    const startX = e.clientX
+    const startWidth = rightPaneWidth
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!isDraggingRef.current) return
+      const delta = startX - ev.clientX
+      const next = Math.min(RIGHT_MAX, Math.max(RIGHT_MIN, startWidth + delta))
+      manualResizeRef.current = true
+      setRightPaneWidth(next)
+    }
+
+    const onMouseUp = () => {
+      isDraggingRef.current = false
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+  }, [rightPaneWidth])
+
+  const handleLayoutFocus = useCallback((f: LayoutFocus) => {
+    manualFocusRef.current = true
+    manualResizeRef.current = false
+    setLayoutFocus(f)
+    setRightPaneWidth(presetWidth(f))
+  }, [])
 
   // SSE connection — enabled when conversion is running
   const sseEnabled = sessionStatus === 'running' || sessionStatus === 'paused'
+
+  const onSSEEvent = useCallback(
+    (eventType: string, data: Record<string, unknown>) => {
+      handleSSEEvent(eventType as import('./types/events').SSEEventType, data)
+
+      if (eventType === 'complete') {
+        setSessionStatus('completed')
+        setRunning(false)
+      }
+      if (eventType === 'error' && data.recoverable === false) {
+        setSessionStatus('failed')
+        setErrorMessage(String(data.message || 'Conversion failed'))
+        setRunning(false)
+      }
+    },
+    [handleSSEEvent, setRunning],
+  )
+
   useSSE({
     url: '/api/v1/convert/stream',
-    onEvent: handleSSEEvent,
+    onEvent: onSSEEvent,
     enabled: sseEnabled,
   })
 
-  // WebSocket for steering
+  // WebSocket for steering — only connect when conversion is active
   const { send: sendSteering } = useWebSocket({
     url: `ws://${window.location.host}/api/v1/ws`,
+    enabled: sseEnabled,
     onResponse: (resp: SteeringResponse) => {
       if (resp.status === 'acknowledged') {
         if (resp.command === 'PAUSE') setSessionStatus('paused')
@@ -71,41 +151,86 @@ export default function App() {
         const err = await resp.json()
         console.error('Failed to start:', err)
         setSessionStatus('failed')
+        setErrorMessage(err.detail || 'Failed to start conversion')
         setRunning(false)
       }
     } catch (e) {
       console.error('Failed to start:', e)
       setSessionStatus('failed')
+      setErrorMessage(e instanceof Error ? e.message : 'Network error')
       setRunning(false)
     }
   }, [reset, setRunning])
+
+  const clearAll = useCallback(() => {
+    fetch('/api/v1/convert/resume', { method: 'DELETE' }).catch(() => {})
+    reset()
+    setSessionStatus('idle')
+    setErrorMessage('')
+    setUploadedFiles([])
+    setLayoutFocus('balanced')
+    setRightPaneWidth(presetWidth('balanced'))
+    manualFocusRef.current = false
+    manualResizeRef.current = false
+  }, [reset])
 
   const isIdle = sessionStatus === 'idle' || sessionStatus === 'completed' || sessionStatus === 'failed'
   const hasGraph = state.flowNodes.length > 0
 
   return (
     <div className="flex flex-col h-screen" style={{ backgroundColor: 'var(--bg-primary)' }}>
-      {/* Top bar */}
-      <TopBar theme={theme} onToggleTheme={toggleTheme} />
+      {/* ── Fixed header block — never scrolls away ── */}
+      <div className="flex-shrink-0" style={{ zIndex: 20 }}>
+        {/* Top bar */}
+        <TopBar theme={theme} onToggleTheme={toggleTheme} />
 
-      {/* Pipeline flowchart — horizontal phase indicator (Section 5.6.1) */}
-      {state.isRunning || state.phase ? (
+        {/* Pipeline orchestration rail — always visible */}
         <div style={{ borderBottom: '1px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' }}>
-          <PipelineFlowchart currentPhase={state.phase} isRunning={state.isRunning} />
+          <PipelineFlowchart
+            currentPhase={state.phase}
+            isRunning={state.isRunning}
+            currentTool={state.currentTool}
+            currentItemId={state.currentItemId}
+            sessionStatus={sessionStatus}
+            recentActivities={state.activities}
+          />
         </div>
-      ) : null}
 
-      {/* Steering controls */}
-      <SteeringBar status={sessionStatus} onCommand={handleSteer} />
+        {/* Steering controls */}
+        <SteeringBar status={sessionStatus} onCommand={handleSteer} onClear={clearAll} />
 
-      {/* Main content area — split pane (FR-1.6) */}
+        {/* Error banner */}
+        {sessionStatus === 'failed' && (
+          <div
+            className="flex items-center gap-3 px-4 py-2 border-b"
+            style={{ backgroundColor: 'var(--score-red)', color: '#fff', borderColor: 'var(--score-red)' }}
+          >
+            <span className="text-xs font-semibold flex-1">
+              Conversion failed{errorMessage ? `: ${errorMessage}` : ''}
+            </span>
+            <button
+              onClick={() => { setSessionStatus('idle'); setErrorMessage('') }}
+              className="text-xs font-medium px-2 py-0.5 rounded"
+              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', cursor: 'pointer' }}
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Main content area — adaptive split pane */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left sidebar: timeline + plan */}
         <aside
-          className="w-56 flex-shrink-0 border-r flex flex-col overflow-y-auto"
-          style={{ borderColor: 'var(--border-color)', backgroundColor: 'var(--bg-secondary)' }}
+          className="flex-shrink-0 border-r flex flex-col overflow-y-auto panel-transition"
+          style={{
+            borderColor: 'var(--border-color)',
+            backgroundColor: 'var(--bg-secondary)',
+            width: layoutFocus === 'stream' ? 180 : 224,
+          }}
         >
-          <StepTimeline currentPhase={state.phase} isRunning={state.isRunning} />
+          <StepTimeline currentPhase={state.phase} isRunning={state.isRunning} sessionStatus={sessionStatus} />
           <div className="px-3 pb-3 flex flex-col gap-3">
             <PlanChecklist items={state.planItems} progressPct={state.progressPct} />
             <ScoreDashboard scores={state.scores} />
@@ -113,8 +238,8 @@ export default function App() {
         </aside>
 
         {/* Center: tabs for stream vs graph */}
-        <main className="flex-1 flex flex-col min-w-0">
-          {/* Tab bar — only show when conversion has started */}
+        <main className="flex-1 flex flex-col min-w-0 panel-transition">
+          {/* Tab bar + layout focus buttons */}
           {!isIdle || state.activities.length > 0 ? (
             <div
               className="flex items-center gap-1 px-3 py-1.5 border-b"
@@ -126,6 +251,22 @@ export default function App() {
               <TabButton active={centerTab === 'graph'} onClick={() => setCenterTab('graph')} disabled={!hasGraph}>
                 Dependency Graph
               </TabButton>
+
+              <div style={{ flex: 1 }} />
+
+              {/* Layout focus presets */}
+              <div style={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                <span style={{ fontSize: 9, color: 'var(--text-muted)', marginRight: 4, fontWeight: 600 }}>LAYOUT</span>
+                <FocusButton active={layoutFocus === 'stream'} onClick={() => handleLayoutFocus('stream')} title="Expand activity stream">
+                  Stream
+                </FocusButton>
+                <FocusButton active={layoutFocus === 'balanced'} onClick={() => handleLayoutFocus('balanced')} title="Balanced layout">
+                  Balanced
+                </FocusButton>
+                <FocusButton active={layoutFocus === 'code'} onClick={() => handleLayoutFocus('code')} title="Expand code panel">
+                  Code
+                </FocusButton>
+              </div>
             </div>
           ) : null}
 
@@ -168,8 +309,25 @@ export default function App() {
           )}
         </main>
 
-        {/* Right pane: code preview / diff (FR-1.6, FR-5.7) */}
-        <aside className="w-[480px] flex-shrink-0 border-l flex flex-col" style={{ borderColor: 'var(--border-color)' }}>
+        {/* Draggable splitter */}
+        <div
+          className="pane-splitter"
+          onMouseDown={handleSplitterMouseDown}
+          role="separator"
+          aria-orientation="vertical"
+          tabIndex={0}
+        />
+
+        {/* Right pane: code preview / diff */}
+        <aside
+          className="flex-shrink-0 flex flex-col"
+          style={{
+            borderColor: 'var(--border-color)',
+            width: rightPaneWidth,
+            minWidth: RIGHT_MIN,
+            maxWidth: RIGHT_MAX,
+          }}
+        >
           {/* Tab bar */}
           <div
             className="flex items-center gap-1 px-3 py-1.5 border-b"
@@ -219,6 +377,34 @@ function TabButton({
         cursor: disabled ? 'not-allowed' : 'pointer',
         opacity: disabled ? 0.5 : 1,
         border: 'none',
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Layout focus preset button
+// ---------------------------------------------------------------------------
+function FocusButton({
+  active, onClick, title, children,
+}: {
+  active: boolean
+  onClick: () => void
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className="px-2 py-0.5 text-[9px] font-semibold rounded transition-colors"
+      style={{
+        backgroundColor: active ? 'var(--accent-primary)' : 'var(--bg-primary)',
+        color: active ? '#fff' : 'var(--text-muted)',
+        border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+        cursor: 'pointer',
       }}
     >
       {children}

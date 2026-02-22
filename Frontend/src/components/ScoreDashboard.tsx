@@ -15,16 +15,19 @@ interface ScoreDashboardProps {
 export function ScoreDashboard({ scores }: ScoreDashboardProps) {
   const [animateIdx, setAnimateIdx] = useState<number>(-1)
   const prevCount = useRef(scores.length)
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
-  // Trigger animation when a new score arrives
+  // Trigger animation when a new score arrives (deferred to avoid synchronous setState)
   useEffect(() => {
     if (scores.length > prevCount.current) {
-      setAnimateIdx(scores.length - 1)
-      const timer = setTimeout(() => setAnimateIdx(-1), 800)
-      prevCount.current = scores.length
-      return () => clearTimeout(timer)
+      const idx = scores.length - 1
+      timerRef.current = setTimeout(() => {
+        setAnimateIdx(idx)
+        timerRef.current = setTimeout(() => setAnimateIdx(-1), 800)
+      }, 0)
     }
     prevCount.current = scores.length
+    return () => { if (timerRef.current) clearTimeout(timerRef.current) }
   }, [scores.length])
 
   if (scores.length === 0) return null

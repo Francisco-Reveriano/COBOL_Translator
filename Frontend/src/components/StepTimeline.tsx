@@ -1,4 +1,5 @@
-import { Check, Circle, Loader2 } from 'lucide-react'
+import { Check, Circle, Loader2, XCircle } from 'lucide-react'
+import type { SessionStatus } from '../types/events'
 
 const PHASES = [
   { key: 'scan', label: 'Scan' },
@@ -14,9 +15,10 @@ const PHASE_ORDER = PHASES.map(p => p.key)
 interface StepTimelineProps {
   currentPhase: string
   isRunning: boolean
+  sessionStatus: SessionStatus
 }
 
-export function StepTimeline({ currentPhase, isRunning }: StepTimelineProps) {
+export function StepTimeline({ currentPhase, isRunning, sessionStatus }: StepTimelineProps) {
   const currentIdx = PHASE_ORDER.indexOf(currentPhase)
 
   return (
@@ -25,13 +27,16 @@ export function StepTimeline({ currentPhase, isRunning }: StepTimelineProps) {
         Pipeline
       </span>
       {PHASES.map((phase, idx) => {
+        const isFailed = sessionStatus === 'failed' && phase.key === currentPhase
         const isActive = phase.key === currentPhase && isRunning
-        const isCompleted = currentIdx > idx || (!isRunning && currentIdx >= idx && currentPhase !== '')
-        const isPending = !isActive && !isCompleted
+        const isCompleted = !isFailed && (currentIdx > idx || (!isRunning && currentIdx >= idx && currentPhase !== ''))
+        const isPending = !isActive && !isCompleted && !isFailed
 
         return (
           <div key={phase.key} className="flex items-center gap-2 py-1.5">
-            {isActive ? (
+            {isFailed ? (
+              <XCircle size={16} style={{ color: 'var(--score-red)' }} />
+            ) : isActive ? (
               <Loader2 size={16} className="animate-spin" style={{ color: 'var(--step-active)' }} />
             ) : isCompleted ? (
               <Check size={16} style={{ color: 'var(--step-done)' }} />
@@ -41,7 +46,9 @@ export function StepTimeline({ currentPhase, isRunning }: StepTimelineProps) {
             <span
               className="text-xs font-medium"
               style={{
-                color: isActive
+                color: isFailed
+                  ? 'var(--score-red)'
+                  : isActive
                   ? 'var(--step-active)'
                   : isCompleted
                   ? 'var(--step-done)'

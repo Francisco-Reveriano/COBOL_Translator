@@ -17,6 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from strands import tool
+from Backend.Agents.Tools.tool_helpers import strands_result
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +283,7 @@ def validation_checker(
         ]
 
     if not python_files:
-        return {"overall_status": "error", "message": "No Python files found to validate"}
+        return strands_result({"overall_status": "error", "message": "No Python files found to validate"}, status="error")
 
     # Find matching scan data
     program_lookup = {}
@@ -330,4 +331,4 @@ def validation_checker(
     results["files_validated"] = len(file_results)
     results["file_results"] = file_results
 
-    return results
+    return strands_result(results)

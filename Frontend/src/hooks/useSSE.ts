@@ -9,6 +9,8 @@ interface UseSSEOptions {
   enabled?: boolean
 }
 
+/* eslint-disable react-hooks/refs -- connectRef.current assigned after useCallback is intentional */
+
 /**
  * SSE client hook with auto-reconnect and Last-Event-ID support (FR-2.2, FR-2.5).
  */
@@ -17,7 +19,9 @@ export function useSSE({ url, onEvent, enabled = true }: UseSSEOptions) {
   const lastEventIdRef = useRef<string>('')
   const eventSourceRef = useRef<EventSource | null>(null)
   const onEventRef = useRef(onEvent)
-  onEventRef.current = onEvent
+  const connectRef = useRef<() => void>(() => {})
+
+  useEffect(() => { onEventRef.current = onEvent }, [onEvent])
 
   const connect = useCallback(() => {
     if (eventSourceRef.current) {
@@ -35,11 +39,9 @@ export function useSSE({ url, onEvent, enabled = true }: UseSSEOptions) {
     es.onerror = () => {
       setConnected(false)
       es.close()
-      // Auto-reconnect after 2s
-      setTimeout(connect, 2000)
+      setTimeout(() => connectRef.current(), 2000)
     }
 
-    // Listen for all event types from the PRD spec
     const eventTypes: SSEEventType[] = [
       'reasoning', 'tool_call', 'tool_result', 'plan_update',
       'score', 'flowchart', 'error', 'complete',
@@ -59,6 +61,7 @@ export function useSSE({ url, onEvent, enabled = true }: UseSSEOptions) {
       })
     }
   }, [url])
+  connectRef.current = connect
 
   useEffect(() => {
     if (enabled) {
