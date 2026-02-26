@@ -1,6 +1,15 @@
+import type { TokenUsage } from '../types/events'
+
 interface ProgressBarProps {
   progressPct: number
   phase: string
+  tokenUsage?: TokenUsage | null
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
 }
 
 const PHASE_LABELS: Record<string, string> = {
@@ -12,7 +21,7 @@ const PHASE_LABELS: Record<string, string> = {
   report: 'Reporting',
 }
 
-export function ProgressBar({ progressPct, phase }: ProgressBarProps) {
+export function ProgressBar({ progressPct, phase, tokenUsage }: ProgressBarProps) {
   const label = PHASE_LABELS[phase] || phase || 'Idle'
 
   return (
@@ -38,6 +47,16 @@ export function ProgressBar({ progressPct, phase }: ProgressBarProps) {
       <span className="text-xs font-mono w-12 text-right" style={{ color: 'var(--text-secondary)' }}>
         {progressPct.toFixed(0)}%
       </span>
+      {tokenUsage && tokenUsage.totalTokens > 0 && (
+        <span
+          className="text-[10px] font-mono flex items-center gap-2 ml-2"
+          style={{ color: 'var(--text-muted)', whiteSpace: 'nowrap' }}
+        >
+          <span title="Input tokens">{formatTokenCount(tokenUsage.inputTokens)} in</span>
+          <span style={{ color: 'var(--border-color)' }}>|</span>
+          <span title="Output tokens">{formatTokenCount(tokenUsage.outputTokens)} out</span>
+        </span>
+      )}
     </div>
   )
 }

@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def build_dependency_graph(scan_results: list[dict]) -> dict:
 # Strands Tool Definition
 # ---------------------------------------------------------------------------
 @tool
-def cobol_scanner(directory: str) -> dict:
+def cobol_scanner(directory: str, output_dir: str = "./output") -> dict:
     """
     Scan a directory of COBOL source files and return structural analysis.
 
@@ -165,10 +165,10 @@ def cobol_scanner(directory: str) -> dict:
 
     Args:
         directory: Path to directory containing COBOL source files.
+        output_dir: Base output directory. Scan results saved to {output_dir}/scan_results.json.
 
     Returns:
-        Dict with 'programs' (list of parsed files), 'dependency_graph',
-        and 'summary' statistics.
+        Markdown summary of the scan with a reference to the saved JSON file.
     """
     dir_path = Path(directory)
     if not dir_path.exists():
@@ -213,9 +213,53 @@ def cobol_scanner(directory: str) -> dict:
         "scan_errors": len(errors),
     }
 
-    return strands_result({
+    result_data = {
         "programs": scan_results,
         "dependency_graph": dep_graph,
         "summary": summary,
         "errors": errors,
-    })
+    }
+
+    # Persist full scan data to disk for downstream tools
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    scan_file = out_path / "scan_results.json"
+    scan_file.write_text(json.dumps(result_data, indent=2, default=str))
+
+    # Build markdown summary for the LLM
+    md_lines = ["## COBOL Scan Results", ""]
+
+    # Programs table
+    md_lines.append("| Program ID | File | LOC | Complexity | SQL | CICS |")
+    md_lines.append("|---|---|---|---|---|---|")
+    for prog in scan_results:
+        sql_flag = "Yes" if prog["has_embedded_sql"] else "-"
+        cics_flag = "Yes" if prog["has_cics"] else "-"
+        md_lines.append(
+            f"| {prog['program_id']} | {Path(prog['file']).name} "
+            f"| {prog['lines_of_code']} | {prog['complexity']} "
+            f"| {sql_flag} | {cics_flag} |"
+        )
+
+    # Dependency graph
+    if dep_graph["edges"]:
+        md_lines.append("")
+        md_lines.append("### Dependency Graph")
+        for edge in dep_graph["edges"]:
+            md_lines.append(f"- {edge['from']} --{edge['type']}--> {edge['to']}")
+
+    # Summary stats
+    md_lines.append("")
+    md_lines.append("### Summary")
+    md_lines.append(f"- **Total files:** {summary['total_files']}")
+    md_lines.append(f"- **Total LOC:** {summary['total_lines_of_code']}")
+    md_lines.append(f"- **Complexity distribution:** {complexity_dist}")
+    md_lines.append(f"- **Programs with SQL:** {summary['programs_with_sql']}")
+    md_lines.append(f"- **Programs with CICS:** {summary['programs_with_cics']}")
+    if errors:
+        md_lines.append(f"- **Scan errors:** {len(errors)}")
+
+    md_lines.append("")
+    md_lines.append(f"> Full scan data saved to `{scan_file}`")
+
+    return markdown_result("\n".join(md_lines))

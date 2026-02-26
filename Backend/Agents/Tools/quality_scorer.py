@@ -30,7 +30,7 @@ from typing import Any, Optional
 
 from typing import Callable
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 logger = logging.getLogger(__name__)
 
@@ -342,6 +342,7 @@ def quality_scorer(
     python_output: str,
     conversion_notes: str = "",
     output_dir: str = "./output",
+    target_file: str = "",
 ) -> dict:
     """
     Score a COBOL-to-Python conversion using GPT-5.2-Codex quality assessment.
@@ -359,11 +360,28 @@ def quality_scorer(
         python_output: Converted Python code to evaluate.
         conversion_notes: Conversion instructions/notes from the plan.
         output_dir: Base output directory for cache storage.
+        target_file: If provided, write python_output to this path before scoring.
+                     Ensures the Code Preview always shows the latest version.
 
     Returns:
         Dict with module, scores (4 dimensions), overall weighted score,
         threshold (green/yellow/red), issues list, and summary.
     """
+    # Resolve target file — use explicit path or derive from module_name
+    resolved_target = target_file
+    if not resolved_target and module_name and python_output:
+        resolved_target = str(Path(output_dir) / "programs" / f"{module_name.lower().replace('-', '_')}.py")
+
+    # Write python_output to disk so Code Preview shows real code
+    if resolved_target and python_output:
+        try:
+            target_path = Path(resolved_target)
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_text(python_output, encoding="utf-8")
+            logger.info(f"Wrote converted Python to {resolved_target}")
+        except Exception as e:
+            logger.warning(f"Failed to write to {resolved_target}: {e}")
+
     cache_dir = Path(output_dir) / "scores_cache"
     cache_key = _cache_key(cobol_source, python_output)
 
@@ -372,6 +390,13 @@ def quality_scorer(
     if cached:
         logger.info(f"Cache hit for {module_name} (key={cache_key[:8]})")
         cached["cached"] = True
+
+        # Save per-module latest score for downstream tools
+        scores_dir = Path(output_dir) / "scores"
+        scores_dir.mkdir(parents=True, exist_ok=True)
+        module_score_file = scores_dir / f"{module_name}.json"
+        module_score_file.write_text(json.dumps(cached, indent=2, default=str))
+
         if _event_callback:
             try:
                 _event_callback("score", {
@@ -385,7 +410,31 @@ def quality_scorer(
                 })
             except Exception as e:
                 logger.warning(f"Failed to emit cached score event: {e}")
-        return strands_result(cached)
+
+        # Build markdown for cached result
+        c_overall = cached.get("overall", 0)
+        c_threshold = cached.get("threshold", "")
+        c_scores = cached.get("scores", {})
+        c_issues = cached.get("issues", [])
+        threshold_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(c_threshold, "⚪")
+        md_lines = [
+            f"## Quality Score: {module_name} (cached)",
+            "",
+            f"**Overall: {c_overall}** {threshold_emoji} ({c_threshold})",
+            "",
+            "| Dimension | Score | Weight |",
+            "|---|---|---|",
+        ]
+        for dim, weight in WEIGHTS.items():
+            md_lines.append(f"| {dim.replace('_', ' ').title()} | {c_scores.get(dim, 0)} | {int(weight*100)}% |")
+        if c_issues:
+            md_lines.append("")
+            md_lines.append(f"### Issues ({len(c_issues)})")
+            for i, issue in enumerate(c_issues, 1):
+                md_lines.append(f"{i}. **[{issue.get('severity','info').upper()}]** {issue.get('dimension','')}: {issue.get('description','')}")
+        md_lines.append("")
+        md_lines.append(f"> Score saved to `{module_score_file}`")
+        return markdown_result("\n".join(md_lines))
 
     # Try GPT-5.2-Codex (FR-3.1)
     fallback = False
@@ -418,6 +467,12 @@ def quality_scorer(
         f"{' [fallback]' if fallback else ''}"
     )
 
+    # Save per-module latest score for downstream tools (refiner reads this)
+    scores_dir = Path(output_dir) / "scores"
+    scores_dir.mkdir(parents=True, exist_ok=True)
+    module_score_file = scores_dir / f"{module_name}.json"
+    module_score_file.write_text(json.dumps(score_result, indent=2, default=str))
+
     # Emit score SSE event for real-time UI updates
     if _event_callback:
         try:
@@ -433,4 +488,39 @@ def quality_scorer(
         except Exception as e:
             logger.warning(f"Failed to emit score event: {e}")
 
-    return strands_result(score_result)
+    # Build markdown score card for the LLM
+    threshold_emoji = {"green": "🟢", "yellow": "🟡", "red": "🔴"}.get(threshold, "⚪")
+    md_lines = [
+        f"## Quality Score: {module_name}",
+        "",
+        f"**Overall: {overall}** {threshold_emoji} ({threshold})",
+        "",
+        "| Dimension | Score | Weight |",
+        "|---|---|---|",
+    ]
+    for dim, weight in WEIGHTS.items():
+        dim_score = score_result["scores"].get(dim, 0)
+        md_lines.append(f"| {dim.replace('_', ' ').title()} | {dim_score} | {int(weight*100)}% |")
+
+    if score_result["issues"]:
+        md_lines.append("")
+        md_lines.append("### Issues")
+        for i, issue in enumerate(score_result["issues"], 1):
+            sev = issue.get("severity", "info").upper()
+            dim = issue.get("dimension", "")
+            desc = issue.get("description", "")
+            line = issue.get("line")
+            rem = issue.get("remediation", "")
+            line_ref = f" (line {line})" if line else ""
+            md_lines.append(f"{i}. **[{sev}]** {dim}{line_ref}: {desc}")
+            if rem:
+                md_lines.append(f"   - Fix: {rem}")
+
+    if score_result["summary"]:
+        md_lines.append("")
+        md_lines.append(f"**Summary:** {score_result['summary']}")
+
+    md_lines.append("")
+    md_lines.append(f"> Score saved to `{module_score_file}`")
+
+    return markdown_result("\n".join(md_lines))

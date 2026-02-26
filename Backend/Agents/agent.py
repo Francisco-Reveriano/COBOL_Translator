@@ -190,6 +190,7 @@ def create_agent(
     event_callback: Optional[EventCallback] = None,
     api_key: Optional[str] = None,
     model_id: Optional[str] = None,
+    output_dir: str = "./output",
 ) -> Agent:
     """
     Create a configured Strands Agent.
@@ -199,6 +200,7 @@ def create_agent(
                         If None, use CLI mode (stdout).
         api_key: Override Anthropic API key.
         model_id: Override model ID.
+        output_dir: Base output directory injected into the system prompt.
 
     Returns:
         Configured Agent instance.
@@ -212,7 +214,7 @@ def create_agent(
 
     return Agent(
         model=model,
-        system_prompt=MASTER_AGENT_PROMPT,
+        system_prompt=MASTER_AGENT_PROMPT.format(output_dir=output_dir),
         tools=[
             cobol_scanner,
             conversion_planner,
@@ -229,25 +231,27 @@ def create_agent(
 # ---------------------------------------------------------------------------
 # Conversion Runner
 # ---------------------------------------------------------------------------
-def build_conversion_prompt(cobol_dir: str) -> str:
+def build_conversion_prompt(cobol_dir: str, output_dir: str = "./output") -> str:
     """Build the master prompt that drives the full agentic loop."""
     return f"""
 You are starting a COBOL-to-Python migration. Follow these steps exactly:
 
-1. Use `cobol_scanner` to scan all COBOL files in: {cobol_dir}
-2. Use `conversion_planner` to create a detailed, structured conversion plan
+1. Use `cobol_scanner(directory="{cobol_dir}", output_dir="{output_dir}")` to scan all COBOL files
+2. Use `conversion_planner(output_dir="{output_dir}")` to create a structured conversion plan
 3. For each item in the plan:
-   a. Use `plan_tracker` to set status to "in_progress"
-   b. Use `cobol_converter` to convert it
-   c. Use `quality_scorer` to score the conversion (pass the COBOL source and Python output)
-   d. REFINEMENT LOOP — target score >= 95.0, max 3 attempts:
+   a. Use `plan_tracker(action="next", output_dir="{output_dir}")` to get the next item
+   b. Use `plan_tracker(action="update_status", ..., new_status="in_progress", output_dir="{output_dir}")`
+   c. Use `cobol_converter(source_file=..., target_file=..., program_id=..., item_id=..., output_dir="{output_dir}")` to load source and conversion context
+   d. Generate the full Python module based on the COBOL source and conversion notes
+   e. Use `quality_scorer(module_name=..., cobol_source=..., python_output=<your Python code>, output_dir="{output_dir}", target_file=<target_file>)` to write the code to disk and score it
+   f. REFINEMENT LOOP — target score >= 95.0, max 3 attempts:
       If the overall score is below 95.0 and you have fewer than 3 refinement attempts:
-        i.   Use `cobol_refiner` with the score_result to get issues and fix instructions
+        i.   Use `cobol_refiner(source_file=..., target_file=..., program_id=..., attempt=<1,2,3>, output_dir="{output_dir}")` — it reads the score from disk
         ii.  Generate an improved Python module addressing every issue
-        iii. Re-score with `quality_scorer` using the improved output
+        iii. Use `quality_scorer(module_name=..., cobol_source=..., python_output=<improved code>, output_dir="{output_dir}", target_file=<target_file>)` to write improved code to disk and re-score
         iv.  Repeat until score >= 95.0 or 3 attempts exhausted
-   e. Mark the item "completed" with `plan_tracker`
-4. After all conversions, use `validation_checker` to verify the output
+   g. Mark the item "completed" with `plan_tracker(action="update_status", ..., new_status="completed", output_dir="{output_dir}")`
+4. After all conversions, use `validation_checker(output_dir="{output_dir}")` to verify the output
 5. Provide a final migration summary report including all quality scores
 
 Begin now by scanning the COBOL source directory.
@@ -259,7 +263,7 @@ def run_conversion(
     output_dir: str = "./output",
     event_callback: Optional[EventCallback] = None,
     steering_checker: Optional[Callable[[], dict]] = None,
-) -> str:
+) -> dict:
     """
     Master loop: scan → plan → convert → validate → report.
 
@@ -286,8 +290,8 @@ def run_conversion(
         set_score_cb(event_callback)
         set_planner_cb(event_callback)
 
-    agent = create_agent(event_callback=event_callback)
-    prompt = build_conversion_prompt(cobol_dir)
+    agent = create_agent(event_callback=event_callback, output_dir=output_dir)
+    prompt = build_conversion_prompt(cobol_dir, output_dir)
 
     logger.info("Starting COBOL-to-Python conversion agent...")
     logger.info(f"   Source: {cobol_dir}")
@@ -296,12 +300,20 @@ def run_conversion(
     result = agent(prompt)
     result_text = str(result)
 
+    # Extract token usage from Strands AgentResult
+    token_usage = None
+    try:
+        if hasattr(result, 'metrics') and hasattr(result.metrics, 'accumulated_usage'):
+            token_usage = dict(result.metrics.accumulated_usage)
+    except Exception as exc:
+        logger.warning(f"Failed to extract token metrics: {exc}")
+
     # Save final report
     report_path = output_path / "migration_report.md"
     report_path.write_text(result_text)
     logger.info(f"Migration report saved to {report_path}")
 
-    return result_text
+    return {"text": result_text, "token_usage": token_usage}
 
 
 # ---------------------------------------------------------------------------

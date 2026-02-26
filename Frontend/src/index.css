@@ -260,6 +260,25 @@ body {
   100% { offset-distance: 100%; opacity: 0; }
 }
 
+/* Activity pulse — green dot indicating active file generation */
+@keyframes activity-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.75); }
+}
+.activity-pulse {
+  animation: activity-pulse 1.5s var(--ease-smooth) infinite;
+}
+
+/* New file glow — subtle background pulse on newly added files */
+@keyframes new-file-glow {
+  0%   { background-color: transparent; }
+  30%  { background-color: color-mix(in srgb, var(--score-green) 15%, transparent); }
+  100% { background-color: transparent; }
+}
+.new-file-glow {
+  animation: new-file-glow 2s var(--ease-smooth) 1;
+}
+
 /* Layout panel transition */
 .panel-transition {
   transition: flex-basis var(--motion-medium) var(--ease-out-expo),
@@ -295,6 +314,85 @@ body {
 .pane-splitter:focus-visible {
   outline: 2px solid var(--accent-primary);
   outline-offset: -1px;
+}
+
+/* ── Markdown body (Activity panel reasoning) ────────────────── */
+.markdown-body {
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3 {
+  margin: 0.6em 0 0.3em;
+  font-weight: 700;
+  color: var(--accent);
+}
+.markdown-body h1 { font-size: 1.05rem; }
+.markdown-body h2 { font-size: 0.95rem; }
+.markdown-body h3 { font-size: 0.875rem; }
+.markdown-body p {
+  margin: 0.25em 0;
+}
+.markdown-body strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.markdown-body code {
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 0.78rem;
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background-color: var(--code-bg);
+  color: var(--text-primary);
+}
+.markdown-body pre {
+  margin: 0.4em 0;
+  padding: 0.6em 0.8em;
+  border-radius: 6px;
+  background-color: var(--code-bg);
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: none;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.3em 0;
+  padding-left: 1.4em;
+}
+.markdown-body li {
+  margin: 0.15em 0;
+}
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.78rem;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border-color);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+.markdown-body th {
+  background-color: var(--bg-secondary);
+  font-weight: 600;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid var(--border-color);
+  margin: 0.6em 0;
+}
+.markdown-body blockquote {
+  margin: 0.4em 0;
+  padding: 0.3em 0.8em;
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+  background-color: var(--bg-secondary);
+  border-radius: 0 4px 4px 0;
 }
 
 /* ── React Flow overrides ────────────────────────────────────── */

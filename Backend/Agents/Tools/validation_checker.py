@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,6 @@ class Test_{func}:
 @tool
 def validation_checker(
     output_dir: str,
-    scan_results: Optional[dict] = None,
     target_file: Optional[str] = None,
     program_id: Optional[str] = None,
     checks: Optional[list] = None,
@@ -253,23 +252,23 @@ def validation_checker(
     """
     Validate converted Python files against COBOL specifications.
 
+    Reads scan data from {output_dir}/scan_results.json (written by cobol_scanner).
     Runs syntax checks, structural coverage analysis, data type mapping
     verification, and generates test stubs.
 
     Args:
-        output_dir: Base output directory containing converted files.
-        scan_results: Original cobol_scanner output for cross-reference.
+        output_dir: Base output directory containing converted files and scan_results.json.
         target_file: Specific Python file to validate (or None for all).
         program_id: Program ID to validate (used to find scan data).
         checks: List of checks to run. Default: all.
                 Options: syntax, coverage, data_types, test_stubs
 
     Returns:
-        Dict with validation results per check and overall status.
+        Markdown validation report with per-file check results.
     """
     default_checks = ["syntax", "coverage", "data_types", "test_stubs"]
     active_checks = checks or default_checks
-    results = {"overall_status": "pass", "checks": {}, "files_validated": 0}
+    overall_status = "PASS"
 
     # Determine files to validate
     if target_file:
@@ -285,50 +284,69 @@ def validation_checker(
     if not python_files:
         return strands_result({"overall_status": "error", "message": "No Python files found to validate"}, status="error")
 
-    # Find matching scan data
-    program_lookup = {}
-    if scan_results:
-        for prog in scan_results.get("programs", []):
+    # Load scan data from file (if exists)
+    program_lookup: dict[str, dict] = {}
+    scan_file = Path(output_dir) / "scan_results.json"
+    if scan_file.exists():
+        scan_data = json.loads(scan_file.read_text())
+        for prog in scan_data.get("programs", []):
             program_lookup[prog["program_id"]] = prog
 
-    file_results = []
+    md_lines = ["## Validation Results", ""]
+
     for py_file in python_files:
-        file_result = {"file": py_file, "checks": {}}
         module_name = Path(py_file).stem
+        md_lines.append(f"### {Path(py_file).name}")
+        md_lines.append("")
 
         # Find matching COBOL scan data
         cobol_data = None
         if program_id and program_id in program_lookup:
             cobol_data = program_lookup[program_id]
         else:
-            # Try to match by module name
             for pid, pdata in program_lookup.items():
                 if pid.lower().replace("-", "_") == module_name:
                     cobol_data = pdata
                     break
 
-        # Run checks
+        # Syntax check
         if "syntax" in active_checks:
-            file_result["checks"]["syntax"] = _check_syntax(py_file)
-            if not file_result["checks"]["syntax"]["valid"]:
-                results["overall_status"] = "fail"
+            syntax_result = _check_syntax(py_file)
+            if syntax_result["valid"]:
+                md_lines.append("- **Syntax:** PASS")
+            else:
+                md_lines.append(f"- **Syntax:** FAIL — {syntax_result.get('error', 'unknown')}")
+                overall_status = "FAIL"
 
+        # Coverage check
         if "coverage" in active_checks and cobol_data:
-            file_result["checks"]["coverage"] = _check_structural_coverage(cobol_data, py_file)
+            cov = _check_structural_coverage(cobol_data, py_file)
+            pct = cov.get("coverage_pct", 0)
+            md_lines.append(f"- **Coverage:** {pct}% ({cov.get('python_functions_found', 0)} functions, {cov.get('python_classes_found', 0)} classes)")
+            missing = cov.get("missing_paragraphs", [])
+            if missing:
+                md_lines.append(f"  - Missing paragraphs: {', '.join(missing[:5])}")
 
+        # Data type check
         if "data_types" in active_checks and cobol_data:
-            file_result["checks"]["data_types"] = _check_data_type_mapping(cobol_data, py_file)
-            if file_result["checks"]["data_types"]["issues_count"] > 0:
-                results["overall_status"] = "warnings"
+            dt = _check_data_type_mapping(cobol_data, py_file)
+            issue_count = dt.get("issues_count", 0)
+            if issue_count > 0:
+                overall_status = "WARNINGS" if overall_status != "FAIL" else "FAIL"
+                md_lines.append(f"- **Data types:** {issue_count} issue(s)")
+                for issue in dt.get("issues", []):
+                    md_lines.append(f"  - [{issue.get('severity', 'info')}] {issue.get('message', '')}")
+            else:
+                md_lines.append("- **Data types:** PASS")
 
+        # Test stubs
         if "test_stubs" in active_checks and cobol_data:
-            file_result["checks"]["test_stubs"] = _generate_test_stubs(
-                cobol_data, py_file, output_dir
-            )
+            stubs = _generate_test_stubs(cobol_data, py_file, output_dir)
+            md_lines.append(f"- **Test stubs:** {stubs.get('total_test_stubs', 0)} generated -> `{stubs.get('test_file', '')}`")
 
-        file_results.append(file_result)
+        md_lines.append("")
 
-    results["files_validated"] = len(file_results)
-    results["file_results"] = file_results
+    md_lines.insert(1, f"**Overall: {overall_status}** | Files validated: {len(python_files)}")
+    md_lines.insert(2, "")
 
-    return strands_result(results)
+    return markdown_result("\n".join(md_lines))

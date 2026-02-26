@@ -3,10 +3,11 @@
  *
  * Shows per-module scores with 4-dimension breakdown.
  * Score badges fade in with color ring animation when new scores arrive.
+ * Click a score card to expand detailed issues, remediation, and summary.
  */
 
 import { useEffect, useRef, useState } from 'react'
-import type { ScoreEvent } from '../types/events'
+import type { ScoreEvent, ScoreIssue } from '../types/events'
 
 interface ScoreDashboardProps {
   scores: ScoreEvent[]
@@ -14,6 +15,7 @@ interface ScoreDashboardProps {
 
 export function ScoreDashboard({ scores }: ScoreDashboardProps) {
   const [animateIdx, setAnimateIdx] = useState<number>(-1)
+  const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
   const prevCount = useRef(scores.length)
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
 
@@ -49,24 +51,41 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
         </span>
         <OverallBadge score={avgOverall} label="avg" />
       </div>
-      <div className="max-h-48 overflow-y-auto">
+      <div className="max-h-72 overflow-y-auto">
         {scores.map((s, i) => (
           <div
             key={`${s.module}-${i}`}
-            className={`flex items-center gap-2 px-3 py-1.5 border-b last:border-b-0 ${i === animateIdx ? 'score-badge-animate' : ''}`}
+            className={`border-b last:border-b-0 ${i === animateIdx ? 'score-badge-animate' : ''}`}
             style={{ borderColor: 'var(--border-color)' }}
           >
-            <ThresholdDot threshold={s.threshold} animate={i === animateIdx} />
-            <span className="text-xs flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
-              {s.module}
-            </span>
-            <div className="flex gap-1.5">
-              <DimBadge label="C" value={s.scores.correctness} />
-              <DimBadge label="Co" value={s.scores.completeness} />
-              <DimBadge label="M" value={s.scores.maintainability} />
-              <DimBadge label="B" value={s.scores.banking_compliance} />
+            {/* Compact summary row (always visible) */}
+            <div
+              className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:opacity-80"
+              onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
+              role="button"
+              aria-expanded={expandedIdx === i}
+            >
+              <ThresholdDot threshold={s.threshold} animate={i === animateIdx} />
+              <span className="text-xs flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
+                {s.module}
+              </span>
+              <div className="flex gap-1.5">
+                <DimBadge label="C" value={s.scores.correctness} />
+                <DimBadge label="Co" value={s.scores.completeness} />
+                <DimBadge label="M" value={s.scores.maintainability} />
+                <DimBadge label="B" value={s.scores.banking_compliance} />
+              </div>
+              <OverallBadge score={s.overall} animate={i === animateIdx} />
+              <span
+                className="text-[9px]"
+                style={{ color: 'var(--text-muted)', transition: 'transform 0.15s' }}
+              >
+                {expandedIdx === i ? '▾' : '▸'}
+              </span>
             </div>
-            <OverallBadge score={s.overall} animate={i === animateIdx} />
+
+            {/* Expanded detail panel */}
+            {expandedIdx === i && <ScoreDetail score={s} />}
           </div>
         ))}
       </div>
@@ -74,6 +93,100 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Score detail panel (expanded view)
+// ---------------------------------------------------------------------------
+function ScoreDetail({ score }: { score: ScoreEvent }) {
+  const { issues, summary, fallback } = score
+
+  return (
+    <div
+      className="px-3 pb-2 pt-1"
+      style={{ backgroundColor: 'var(--bg-secondary)', borderTop: '1px solid var(--border-color)' }}
+    >
+      {/* Fallback badge */}
+      {fallback && (
+        <div
+          className="text-[9px] font-semibold px-2 py-0.5 rounded inline-block mb-1.5"
+          style={{ backgroundColor: 'var(--score-yellow)', color: '#fff' }}
+        >
+          AST FALLBACK
+        </div>
+      )}
+
+      {/* Summary */}
+      {summary && (
+        <p className="text-[10px] mb-1.5 leading-tight" style={{ color: 'var(--text-secondary)' }}>
+          {summary}
+        </p>
+      )}
+
+      {/* Issues list */}
+      {issues.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          <span
+            className="text-[9px] font-semibold uppercase tracking-wider"
+            style={{ color: 'var(--text-muted)' }}
+          >
+            Issues ({issues.length})
+          </span>
+          {issues.map((issue, j) => (
+            <IssueRow key={j} issue={issue} />
+          ))}
+        </div>
+      ) : (
+        <p className="text-[10px]" style={{ color: 'var(--score-green)' }}>
+          No issues found
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Individual issue row
+// ---------------------------------------------------------------------------
+function IssueRow({ issue }: { issue: ScoreIssue }) {
+  const severityColor =
+    issue.severity === 'critical' ? 'var(--score-red)' :
+    issue.severity === 'warning' ? 'var(--score-yellow)' :
+    'var(--accent-primary)'
+
+  return (
+    <div
+      className="rounded px-1.5 py-1"
+      style={{ backgroundColor: 'var(--bg-card)', border: '1px solid var(--border-color)' }}
+    >
+      {/* Severity + dimension header */}
+      <div className="flex items-center gap-1 mb-0.5">
+        <span
+          className="text-[8px] font-bold uppercase px-1 py-px rounded"
+          style={{ backgroundColor: severityColor, color: '#fff' }}
+        >
+          {issue.severity}
+        </span>
+        <span className="text-[9px] font-mono truncate" style={{ color: 'var(--text-muted)' }}>
+          {issue.dimension}
+          {issue.line != null && ` :${issue.line}`}
+        </span>
+      </div>
+      {/* Description */}
+      <p className="text-[10px] leading-tight" style={{ color: 'var(--text-primary)' }}>
+        {issue.description}
+      </p>
+      {/* Remediation */}
+      {issue.remediation && (
+        <p className="text-[9px] leading-tight mt-0.5" style={{ color: 'var(--score-green)' }}>
+          Fix: {issue.remediation}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Helper components
+// ---------------------------------------------------------------------------
 function ThresholdDot({ threshold, animate }: { threshold: string; animate?: boolean }) {
   const color =
     threshold === 'green' ? 'var(--score-green)' :

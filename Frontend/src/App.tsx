@@ -33,6 +33,7 @@ export default function App() {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
   const [centerTab, setCenterTab] = useState<CenterTab>('stream')
   const [rightTab, setRightTab] = useState<RightTab>('code')
+  const [fileRefreshTick, setFileRefreshTick] = useState(0)
   const [layoutFocus, setLayoutFocus] = useState<LayoutFocus>('balanced')
   const manualFocusRef = useRef(false)
 
@@ -86,6 +87,11 @@ export default function App() {
     document.addEventListener('mouseup', onMouseUp)
   }, [rightPaneWidth])
 
+  const handleSplitterDoubleClick = useCallback(() => {
+    manualResizeRef.current = true
+    setRightPaneWidth(prev => prev < (RIGHT_MIN + RIGHT_MAX) / 2 ? RIGHT_MAX : RIGHT_MIN)
+  }, [])
+
   const handleLayoutFocus = useCallback((f: LayoutFocus) => {
     manualFocusRef.current = true
     manualResizeRef.current = false
@@ -96,11 +102,23 @@ export default function App() {
   // SSE connection — enabled when conversion is running
   const sseEnabled = sessionStatus === 'running' || sessionStatus === 'paused'
 
+  const FILE_PRODUCING_TOOLS = ['cobol_converter', 'cobol_refiner', 'validation_checker', 'quality_scorer']
+
   const onSSEEvent = useCallback(
     (eventType: string, data: Record<string, unknown>) => {
       handleSSEEvent(eventType as import('./types/events').SSEEventType, data)
 
+      // Bump file refresh tick when a file-producing tool completes
+      if (
+        eventType === 'tool_result' &&
+        typeof data.tool === 'string' &&
+        FILE_PRODUCING_TOOLS.includes(data.tool)
+      ) {
+        setFileRefreshTick(t => t + 1)
+      }
+
       if (eventType === 'complete') {
+        setFileRefreshTick(t => t + 1)
         setSessionStatus('completed')
         setRunning(false)
       }
@@ -164,6 +182,7 @@ export default function App() {
 
   const clearAll = useCallback(() => {
     fetch('/api/v1/convert/resume', { method: 'DELETE' }).catch(() => {})
+    fetch('/api/v1/files', { method: 'DELETE' }).catch(() => {})
     reset()
     setSessionStatus('idle')
     setErrorMessage('')
@@ -313,6 +332,7 @@ export default function App() {
         <div
           className="pane-splitter"
           onMouseDown={handleSplitterMouseDown}
+          onDoubleClick={handleSplitterDoubleClick}
           role="separator"
           aria-orientation="vertical"
           tabIndex={0}
@@ -320,7 +340,7 @@ export default function App() {
 
         {/* Right pane: code preview / diff */}
         <aside
-          className="flex-shrink-0 flex flex-col"
+          className="flex-shrink-0 flex flex-col panel-transition"
           style={{
             borderColor: 'var(--border-color)',
             width: rightPaneWidth,
@@ -341,16 +361,36 @@ export default function App() {
             </TabButton>
           </div>
 
-          {rightTab === 'code' ? (
-            <CodePreview theme={theme} />
-          ) : (
-            <DiffView theme={theme} />
-          )}
+          {/* Keep both panes mounted so they retain state across tab switches.
+              The hidden pane is removed from layout via display:none. */}
+          <div className="flex-1 flex flex-col" style={{ display: rightTab === 'code' ? 'flex' : 'none' }}>
+            <CodePreview
+              theme={theme}
+              phase={state.phase}
+              isRunning={state.isRunning}
+              currentTool={state.currentTool}
+              currentItemId={state.currentItemId}
+              fileRefreshTick={fileRefreshTick}
+              sessionStatus={sessionStatus}
+            />
+          </div>
+          <div className="flex-1 flex flex-col" style={{ display: rightTab === 'diff' ? 'flex' : 'none' }}>
+            <DiffView
+              theme={theme}
+              fileRefreshTick={fileRefreshTick}
+              isRunning={state.isRunning}
+              sessionStatus={sessionStatus}
+            />
+          </div>
         </aside>
       </div>
 
       {/* Bottom progress bar (FR-1.8) */}
-      <ProgressBar progressPct={state.progressPct} phase={state.phase} />
+      <ProgressBar
+        progressPct={state.progressPct}
+        phase={state.phase}
+        tokenUsage={state.completion?.token_usage}
+      />
     </div>
   )
 }

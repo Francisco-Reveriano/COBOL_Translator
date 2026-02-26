@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 logger = logging.getLogger(__name__)
 
@@ -184,23 +184,30 @@ def _build_conversion_notes(program: dict) -> dict:
 # Strands Tool Definition
 # ---------------------------------------------------------------------------
 @tool
-def conversion_planner(scan_results: dict, output_dir: str = "./output") -> dict:
+def conversion_planner(output_dir: str = "./output") -> dict:
     """
     Generate a structured COBOL-to-Python conversion plan (TodoWrite pattern).
 
-    Takes the output of cobol_scanner and produces an ordered, dependency-aware
-    plan with detailed conversion instructions for each program. The plan follows
-    Claude Code's TodoWrite pattern with trackable statuses and priorities.
+    Reads scan results from {output_dir}/scan_results.json (written by cobol_scanner)
+    and produces an ordered, dependency-aware plan with detailed conversion
+    instructions for each program.
 
     Args:
-        scan_results: Output from the cobol_scanner tool containing 'programs'
-                      and 'dependency_graph'.
-        output_dir: Target directory for converted Python files.
+        output_dir: Base output directory containing scan_results.json and
+                    where converted Python files will be written.
 
     Returns:
-        Dict with 'plan_id', 'items' (ordered list of plan items),
-        'phases' summary, and 'conversion_guidelines'.
+        Markdown summary of the plan with a reference to the saved JSON file.
     """
+    # Load scan data from file (written by cobol_scanner)
+    scan_file = Path(output_dir) / "scan_results.json"
+    if not scan_file.exists():
+        return strands_result(
+            {"error": f"scan_results.json not found in {output_dir}. Run cobol_scanner first."},
+            status="error",
+        )
+    scan_results = json.loads(scan_file.read_text())
+
     programs = scan_results.get("programs", [])
     dep_graph = scan_results.get("dependency_graph", {"nodes": [], "edges": []})
 
@@ -417,4 +424,41 @@ def conversion_planner(scan_results: dict, output_dir: str = "./output") -> dict
         except Exception as e:
             logger.warning(f"Failed to emit planner events: {e}")
 
-    return strands_result(plan)
+    # Build markdown summary for the LLM
+    md_lines = [
+        f"## Conversion Plan: `{plan_id}`",
+        f"**Total items:** {len(plan_items)}",
+        "",
+    ]
+
+    # Group items by phase
+    phases_order = ["shared_modules", "core_programs", "integration", "validation"]
+    items_by_phase: dict[str, list] = {}
+    for item in plan_items:
+        items_by_phase.setdefault(item["phase"], []).append(item)
+
+    for phase in phases_order:
+        phase_items = items_by_phase.get(phase, [])
+        if not phase_items:
+            continue
+        md_lines.append(f"### Phase: {phase.replace('_', ' ').title()}")
+        md_lines.append("")
+        md_lines.append("| Status | ID | Program | Complexity | Priority | Deps |")
+        md_lines.append("|---|---|---|---|---|---|")
+        for item in phase_items:
+            deps = ", ".join(item["depends_on"]) if item["depends_on"] else "-"
+            md_lines.append(
+                f"| {item['status']} | {item['id']} | {item['program_id']} "
+                f"| {item['complexity']} | {item['priority']} | {deps} |"
+            )
+        md_lines.append("")
+
+    # Conversion guidelines summary
+    md_lines.append("### Conversion Guidelines")
+    for key, val in guidelines.items():
+        md_lines.append(f"- **{key}:** {val}")
+
+    md_lines.append("")
+    md_lines.append(f"> Plan saved to `{plan_path}`")
+
+    return markdown_result("\n".join(md_lines))

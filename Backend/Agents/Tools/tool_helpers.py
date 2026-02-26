@@ -24,3 +24,11 @@ def strands_result(data: Any, status: str = "success") -> dict:
         "status": status,
         "content": [{"text": json.dumps(data, default=str)}],
     }
+
+
+def markdown_result(text: str, status: str = "success") -> dict:
+    """Wrap a markdown string in the Strands SDK tool-return envelope."""
+    return {
+        "status": status,
+        "content": [{"text": text}],
+    }

@@ -100,12 +100,19 @@ export interface ErrorEvent {
   retry_count: number
 }
 
+export interface TokenUsage {
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
 export interface CompleteEvent {
   summary: Record<string, unknown>
   output_dir: string
   total_modules?: number
   completed_modules?: number
   skipped_modules?: number
+  token_usage?: TokenUsage | null
 }
 
 export interface ConversionStatus {

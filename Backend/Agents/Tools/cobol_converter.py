@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 
 # ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ from Backend.Agents.Tools.tool_helpers import strands_result
 # ---------------------------------------------------------------------------
 PYTHON_MODULE_HEADER = '''"""
 {module_name}
-{'=' * len('{module_name}')}
+{separator}
 Auto-converted from COBOL: {source_file}
 Conversion date: {date}
 Original program ID: {program_id}
@@ -150,15 +150,14 @@ def cobol_converter(
     source_file: str,
     target_file: str,
     program_id: str,
-    conversion_notes: dict,
-    plan_item_id: str,
+    item_id: str,
     output_dir: str = "./output",
 ) -> dict:
     """
     Convert a single COBOL program to Python.
 
-    Reads the COBOL source, applies conversion rules from the plan,
-    generates a structured Python module, and writes it to the target path.
+    Reads the COBOL source, loads conversion notes from the plan file,
+    generates a structured Python module scaffold, and writes it to the target path.
     The LLM handles the intelligent translation; this tool provides
     the scaffolding, file I/O, and structural templates.
 
@@ -166,13 +165,12 @@ def cobol_converter(
         source_file: Path to the COBOL source file.
         target_file: Path where the Python output should be written.
         program_id: COBOL PROGRAM-ID for the module being converted.
-        conversion_notes: Detailed conversion instructions from the plan.
-        plan_item_id: ID of the plan item being executed (for tracking).
-        output_dir: Base output directory.
+        item_id: ID of the plan item being executed (for tracking).
+        output_dir: Base output directory (contains conversion_plan.json).
 
     Returns:
-        Dict with conversion result including the generated Python code
-        context for the LLM to refine, file paths, and metadata.
+        Markdown with COBOL source, conversion notes, scaffolding info,
+        and instructions to generate the full Python module.
     """
     source_path = Path(source_file)
     target_path = Path(target_file)
@@ -180,12 +178,21 @@ def cobol_converter(
     # Read COBOL source
     if not source_path.exists():
         return strands_result({
-            "success": False,
             "error": f"Source file not found: {source_file}",
-            "plan_item_id": plan_item_id,
+            "item_id": item_id,
         }, status="error")
 
     cobol_source = source_path.read_text(encoding="utf-8", errors="replace")
+
+    # Load conversion notes from the plan file
+    conversion_notes = {}
+    plan_file = Path(output_dir) / "conversion_plan.json"
+    if plan_file.exists():
+        plan = json.loads(plan_file.read_text())
+        for item in plan.get("items", []):
+            if item["id"] == item_id:
+                conversion_notes = item.get("conversion_notes", {})
+                break
 
     # Parse basic structure for scaffolding
     lines = cobol_source.split("\n")
@@ -197,7 +204,6 @@ def cobol_converter(
     # Extract divisions and sections for documentation
     divisions = []
     sections = []
-    paragraphs = []
     for line in clean_lines:
         upper = line.upper().strip()
         if "DIVISION" in upper and "." in upper:
@@ -211,6 +217,7 @@ def cobol_converter(
     module_name = _cobol_name_to_python(program_id)
     header = PYTHON_MODULE_HEADER.format(
         module_name=module_name,
+        separator="=" * len(module_name),
         source_file=source_file,
         date=datetime.now().strftime("%Y-%m-%d"),
         program_id=program_id,
@@ -220,48 +227,10 @@ def cobol_converter(
         notes=json.dumps(conversion_notes, indent=2, default=str)[:500],
     )
 
-    # Build conversion context for the LLM
-    # The agent will use this context to generate the actual Python code
-    conversion_context = {
-        "cobol_source": cobol_source,
-        "cobol_source_lines": len(clean_lines),
-        "module_header": header,
-        "target_module_name": module_name,
-        "conversion_notes": conversion_notes,
-        "python_scaffolding": {
-            "imports": [
-                "from __future__ import annotations",
-                "from dataclasses import dataclass, field",
-                "from decimal import Decimal, ROUND_HALF_UP",
-                "from typing import Optional, Union",
-                "from pathlib import Path",
-                "import logging",
-            ],
-            "naming_convention": "snake_case (COBOL-NAME → cobol_name)",
-            "type_mapping": {
-                "PIC X(n)": "str",
-                "PIC 9(n)": "int",
-                "PIC 9(n)V9(m)": "Decimal",
-                "PIC S9(n) COMP": "int",
-                "PIC S9(n) COMP-3": "Decimal",
-                "FILLER": "# skip or bytes padding",
-            },
-            "control_flow_mapping": {
-                "PERFORM paragraph": "function_call()",
-                "PERFORM UNTIL condition": "while not condition:",
-                "PERFORM VARYING": "for i in range(start, stop, step):",
-                "EVALUATE / WHEN": "match value: case pattern:",
-                "IF / ELSE": "if condition: ... else:",
-                "GO TO": "# Refactor to structured control flow",
-            },
-        },
-    }
-
     # Ensure target directory exists
     target_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write a placeholder that the LLM will refine
-    # The agent's next turn will generate the actual conversion
     placeholder = header + f"""
 # ─────────────────────────────────────────────────────────────────────
 # TODO: Complete conversion from COBOL source
@@ -270,26 +239,43 @@ def cobol_converter(
 # ─────────────────────────────────────────────────────────────────────
 
 # The agent will generate the full Python conversion in the next step.
-# Conversion notes have been provided in the context above.
 """
     target_path.write_text(placeholder)
 
-    return strands_result({
-        "success": True,
-        "plan_item_id": plan_item_id,
-        "program_id": program_id,
-        "source_file": source_file,
-        "target_file": target_file,
-        "cobol_lines": len(clean_lines),
-        "conversion_context": conversion_context,
-        "message": (
-            f"COBOL source loaded ({len(clean_lines)} lines). "
-            f"Scaffolding written to {target_file}. "
-            f"Please now generate the full Python conversion using the "
-            f"conversion_context provided. Write the complete Python module "
-            f"that faithfully translates the COBOL logic, then save it to {target_file}."
-        ),
-    })
+    # Build markdown for the LLM
+    md_lines = [
+        f"## Convert: {program_id}",
+        f"- **Source:** `{source_file}` ({len(clean_lines)} LOC)",
+        f"- **Target:** `{target_file}`",
+        f"- **item_id:** {item_id}",
+        "",
+        "### COBOL Source",
+        "```cobol",
+        cobol_source,
+        "```",
+        "",
+    ]
+
+    # Conversion notes as bullet points
+    if conversion_notes:
+        md_lines.append("### Conversion Notes")
+        for key, val in conversion_notes.items():
+            if val:
+                md_lines.append(f"- **{key}:** {val}")
+        md_lines.append("")
+
+    # Scaffolding info
+    md_lines.extend([
+        "### Python Scaffolding",
+        "- **Imports:** `dataclasses`, `Decimal`, `typing`, `pathlib`, `logging`",
+        "- **Naming:** COBOL-NAME -> snake_case",
+        "- **Type mapping:** PIC X->str, PIC 9->int, PIC 9V9->Decimal, COMP-3->Decimal",
+        "- **Control flow:** PERFORM->function call, PERFORM UNTIL->while, EVALUATE->match/case",
+        "",
+        f"Generate the complete Python module and write it to `{target_file}`.",
+    ])
+
+    return markdown_result("\n".join(md_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -300,30 +286,27 @@ def cobol_refiner(
     source_file: str,
     target_file: str,
     program_id: str,
-    score_result: dict,
     attempt: int,
     output_dir: str = "./output",
 ) -> dict:
     """
     Refine a previously converted Python module using quality scorer feedback.
 
-    Called when a module's quality score is below 95.0. Reads the current
-    Python output and the original COBOL source, then provides the scorer's
-    issues and remediation suggestions as structured context so the agent
-    can generate an improved version.
+    Called when a module's quality score is below 95.0. Reads the latest score
+    from {output_dir}/scores/{program_id}.json (written by quality_scorer),
+    then provides the issues and remediation context so the agent can generate
+    an improved version.
 
     Args:
         source_file: Path to the original COBOL source file.
         target_file: Path to the current Python output to improve.
         program_id: COBOL PROGRAM-ID for the module being refined.
-        score_result: The quality_scorer result dict containing 'scores',
-                      'overall', 'issues', and 'summary'.
         attempt: Current refinement attempt number (1-based, max 3).
-        output_dir: Base output directory.
+        output_dir: Base output directory (contains scores/{program_id}.json).
 
     Returns:
-        Dict with the COBOL source, current Python code, and formatted
-        fix instructions for the agent to generate an improved version.
+        Markdown with current score, issues, current Python, original COBOL,
+        and instructions to fix all issues.
     """
     source_path = Path(source_file)
     target_path = Path(target_file)
@@ -332,6 +315,14 @@ def cobol_refiner(
         return strands_result({
             "error": f"COBOL source not found: {source_file}",
         }, status="error")
+
+    # Load latest score from file (written by quality_scorer)
+    score_file = Path(output_dir) / "scores" / f"{program_id}.json"
+    if not score_file.exists():
+        return strands_result({
+            "error": f"Score file not found: {score_file}. Run quality_scorer first.",
+        }, status="error")
+    score_result = json.loads(score_file.read_text())
 
     cobol_source = source_path.read_text(encoding="utf-8", errors="replace")
 
@@ -342,41 +333,47 @@ def cobol_refiner(
     overall = score_result.get("overall", 0)
     scores = score_result.get("scores", {})
     issues = score_result.get("issues", [])
-    summary = score_result.get("summary", "")
+    gap = round(95.0 - overall, 1)
 
-    fix_instructions = []
-    for i, issue in enumerate(issues, 1):
-        severity = issue.get("severity", "info")
-        dimension = issue.get("dimension", "")
-        description = issue.get("description", "")
-        line = issue.get("line")
-        remediation = issue.get("remediation", "")
-        line_ref = f" (line {line})" if line else ""
-        fix_instructions.append(
-            f"{i}. [{severity.upper()}] {dimension}{line_ref}: {description}\n"
-            f"   Fix: {remediation}"
-        )
+    # Build markdown for the LLM
+    md_lines = [
+        f"## Refinement: {program_id} (attempt {attempt}/3)",
+        f"- **Current score:** {overall} | **Target:** 95.0 | **Gap:** {gap}",
+        "",
+        "### Dimension Scores",
+        "| Dimension | Score |",
+        "|---|---|",
+    ]
+    for dim, val in scores.items():
+        md_lines.append(f"| {dim.replace('_', ' ').title()} | {val} |")
 
-    return strands_result({
-        "program_id": program_id,
-        "attempt": attempt,
-        "max_attempts": 3,
-        "current_overall_score": overall,
-        "target_score": 95.0,
-        "score_gap": round(95.0 - overall, 1),
-        "dimension_scores": scores,
-        "scorer_summary": summary,
-        "cobol_source": cobol_source,
-        "current_python_output": current_python,
-        "fix_instructions": "\n".join(fix_instructions),
-        "issue_count": len(issues),
-        "message": (
-            f"Refinement attempt {attempt}/3 for {program_id}. "
-            f"Current score: {overall} (target: 95.0, gap: {round(95.0 - overall, 1)}). "
-            f"{len(issues)} issues to address. "
-            f"Please carefully review each issue below, apply the suggested fixes "
-            f"to the Python code, and generate a complete improved version. "
-            f"Focus on the highest-severity issues first. "
-            f"Write the improved module to {target_file}."
-        ),
-    })
+    if issues:
+        md_lines.append("")
+        md_lines.append("### Issues to Fix")
+        for i, issue in enumerate(issues, 1):
+            sev = issue.get("severity", "info").upper()
+            dim = issue.get("dimension", "")
+            desc = issue.get("description", "")
+            line = issue.get("line")
+            rem = issue.get("remediation", "")
+            line_ref = f" (line {line})" if line else ""
+            md_lines.append(f"{i}. **[{sev}]** {dim}{line_ref}: {desc}")
+            if rem:
+                md_lines.append(f"   - Fix: {rem}")
+
+    md_lines.extend([
+        "",
+        "### Current Python Output",
+        "```python",
+        current_python,
+        "```",
+        "",
+        "### Original COBOL Source",
+        "```cobol",
+        cobol_source,
+        "```",
+        "",
+        f"Fix all issues and write the improved module to `{target_file}`.",
+    ])
+
+    return markdown_result("\n".join(md_lines))

@@ -1,5 +1,7 @@
 import { ChevronDown, ChevronRight, Clock, RefreshCw, Target, Wrench, Zap } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { ActivityEntry } from '../stores/conversionStore'
 
 const PHASE_LABELS: Record<string, string> = {
@@ -226,10 +228,10 @@ function ActivityItem({ entry }: { entry: ActivityEntry }) {
   if (entry.type === 'reasoning') {
     return (
       <div
-        className="mb-1 whitespace-pre-wrap anim-sweep-right"
+        className="mb-1 anim-sweep-right markdown-body"
         style={{ color: 'var(--text-primary)' }}
       >
-        {entry.text}
+        <ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text || ''}</ReactMarkdown>
       </div>
     )
   }

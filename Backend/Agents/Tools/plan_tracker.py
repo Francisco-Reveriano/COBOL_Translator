@@ -19,7 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
 logger = logging.getLogger(__name__)
 
@@ -208,60 +208,59 @@ def plan_tracker(
 
     # ── VIEW: Full plan display ──────────────────────────────────────────
     if action == "view":
-        display_items = []
-        for item in plan["items"]:
-            emoji = _get_status_emoji(item["status"])
-            deps_str = f" (deps: {', '.join(item['depends_on'])})" if item["depends_on"] else ""
-            display_items.append({
-                "id": item["id"],
-                "display": f"{emoji} [{item['priority']}] {item['title']} — {item['complexity']}{deps_str}",
-                "status": item["status"],
-                "phase": item["phase"],
-                "program_id": item["program_id"],
-                "source_file": item["source_file"],
-                "target_file": item["target_file"],
-                "conversion_notes": item["conversion_notes"],
-            })
-
         _emit_plan_update()
         _emit_flowchart_update()
 
-        return strands_result({
-            "plan_id": plan["plan_id"],
-            "total_items": len(plan["items"]),
-            "items": display_items,
-            "guidelines": plan.get("conversion_guidelines", {}),
-        })
+        md_lines = [
+            f"## Conversion Plan: `{plan['plan_id']}`",
+            f"**Total items:** {len(plan['items'])}",
+            "",
+            "| Status | ID | Priority | Title | Complexity |",
+            "|---|---|---|---|---|",
+        ]
+        for item in plan["items"]:
+            emoji = _get_status_emoji(item["status"])
+            md_lines.append(
+                f"| {emoji} {item['status']} | {item['id']} | {item['priority']} "
+                f"| {item['title']} | {item['complexity']} |"
+            )
+
+        return markdown_result("\n".join(md_lines))
 
     # ── SUMMARY: Compact context injection (like Claude Code's reminder) ─
     elif action == "summary":
         items = plan["items"]
-        status_counts = {}
+        status_counts: dict[str, int] = {}
         for item in items:
             s = item["status"]
             status_counts[s] = status_counts.get(s, 0) + 1
 
-        in_progress = [
-            {"id": item["id"], "title": item["title"]}
-            for item in items if item["status"] == "in_progress"
-        ]
+        total = len(items)
+        completed = status_counts.get("completed", 0)
+        pct = round(completed / total * 100, 1) if total else 0
+
+        in_progress = [item for item in items if item["status"] == "in_progress"]
         next_pending = next(
             (item for item in items if item["status"] == "pending"),
             None,
         )
 
-        return strands_result({
-            "plan_id": plan["plan_id"],
-            "progress": status_counts,
-            "completion_pct": round(
-                status_counts.get("completed", 0) / len(items) * 100, 1
-            ) if items else 0,
-            "currently_in_progress": in_progress,
-            "next_pending": {
-                "id": next_pending["id"],
-                "title": next_pending["title"],
-            } if next_pending else None,
-        })
+        md_lines = [
+            f"## Plan Summary ({pct}% complete)",
+            "",
+        ]
+        for s, c in status_counts.items():
+            md_lines.append(f"- **{s}:** {c}")
+        if in_progress:
+            md_lines.append("")
+            md_lines.append("**In progress:**")
+            for item in in_progress:
+                md_lines.append(f"- `{item['id']}` {item['title']}")
+        if next_pending:
+            md_lines.append("")
+            md_lines.append(f"**Next pending:** `{next_pending['id']}` {next_pending['title']}")
+
+        return markdown_result("\n".join(md_lines))
 
     # ── UPDATE_STATUS: Change item status ────────────────────────────────
     elif action == "update_status":
@@ -296,13 +295,9 @@ def plan_tracker(
                 _emit_plan_update()
                 _emit_flowchart_update()
 
-                return strands_result({
-                    "updated": True,
-                    "item_id": item_id,
-                    "old_status": old_status,
-                    "new_status": new_status,
-                    "title": item["title"],
-                })
+                return markdown_result(
+                    f"Item `{item_id}` ({item['title']}): {old_status} -> {new_status}"
+                )
 
         return strands_result({"error": f"Item {item_id} not found in plan"}, status="error")
 
@@ -310,7 +305,16 @@ def plan_tracker(
     elif action == "check_deps":
         if not item_id:
             return strands_result({"error": "item_id required for check_deps"}, status="error")
-        return strands_result(_check_dependencies(item_id))
+
+        dep_result = _check_dependencies(item_id)
+        if dep_result["ready"]:
+            return markdown_result(f"**Ready:** YES — all dependencies for `{item_id}` are met.")
+        else:
+            blocking = dep_result["blocking_items"]
+            lines = [f"**Ready:** NO — `{item_id}` is blocked by:"]
+            for b in blocking:
+                lines.append(f"- `{b['id']}` {b['title']} ({b['status']})")
+            return markdown_result("\n".join(lines))
 
     # ── NEXT: Get next actionable item ───────────────────────────────────
     elif action == "next":
@@ -318,19 +322,17 @@ def plan_tracker(
             if item["status"] == "pending":
                 dep_check = _check_dependencies(item["id"])
                 if dep_check["ready"]:
-                    return strands_result({
-                        "next_item": {
-                            "id": item["id"],
-                            "title": item["title"],
-                            "phase": item["phase"],
-                            "program_id": item["program_id"],
-                            "source_file": item["source_file"],
-                            "target_file": item["target_file"],
-                            "complexity": item["complexity"],
-                            "conversion_notes": item["conversion_notes"],
-                        },
-                        "dependencies_met": True,
-                    })
+                    md_lines = [
+                        "## Next Item",
+                        f"- **item_id:** {item['id']}",
+                        f"- **title:** {item['title']}",
+                        f"- **phase:** {item['phase']}",
+                        f"- **program_id:** {item['program_id']}",
+                        f"- **source_file:** {item['source_file']}",
+                        f"- **target_file:** {item['target_file']}",
+                        f"- **complexity:** {item['complexity']}",
+                    ]
+                    return markdown_result("\n".join(md_lines))
 
         # Check if all done
         all_done = all(
@@ -338,28 +340,38 @@ def plan_tracker(
             for item in _plan_state["items"]
         )
         if all_done:
-            return strands_result({"next_item": None, "all_completed": True})
+            return markdown_result("**All items completed.** No more pending work.")
 
-        return strands_result({"next_item": None, "blocked": True, "reason": "All pending items have unmet dependencies"})
+        return markdown_result("**Blocked:** All pending items have unmet dependencies.")
 
     # ── PROGRESS: Completion stats ───────────────────────────────────────
     elif action == "progress":
         items = _plan_state["items"]
         total = len(items)
         completed = sum(1 for i in items if i["status"] == "completed")
-        blocked = [
-            {"id": i["id"], "title": i["title"]}
-            for i in items if i["status"] == "blocked"
-        ]
+        in_prog = sum(1 for i in items if i["status"] == "in_progress")
+        pending = sum(1 for i in items if i["status"] == "pending")
+        blocked = [i for i in items if i["status"] == "blocked"]
+        pct = round(completed / total * 100, 1) if total else 0
 
-        return strands_result({
-            "total": total,
-            "completed": completed,
-            "in_progress": sum(1 for i in items if i["status"] == "in_progress"),
-            "pending": sum(1 for i in items if i["status"] == "pending"),
-            "blocked_items": blocked,
-            "completion_pct": round(completed / total * 100, 1) if total else 0,
-        })
+        md_lines = [
+            f"## Progress: {pct}%",
+            "",
+            "| Metric | Count |",
+            "|---|---|",
+            f"| Completed | {completed} |",
+            f"| In progress | {in_prog} |",
+            f"| Pending | {pending} |",
+            f"| Blocked | {len(blocked)} |",
+            f"| **Total** | **{total}** |",
+        ]
+        if blocked:
+            md_lines.append("")
+            md_lines.append("**Blocked items:**")
+            for i in blocked:
+                md_lines.append(f"- `{i['id']}` {i['title']}")
+
+        return markdown_result("\n".join(md_lines))
 
     else:
         return strands_result({"error": f"Unknown action: {action}. Use: view, summary, update_status, check_deps, next, progress"}, status="error")

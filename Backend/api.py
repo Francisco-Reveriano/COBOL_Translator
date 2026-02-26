@@ -266,10 +266,14 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> N
             ),
         )
 
+        result_text = result.get("text", "") if isinstance(result, dict) else str(result)
+        token_usage = result.get("token_usage") if isinstance(result, dict) else None
+
         session.complete()
         emit("complete", {
-            "summary": {"report": result[:2000] if result else ""},
+            "summary": {"report": result_text[:2000] if result_text else ""},
             "output_dir": output_dir,
+            "token_usage": token_usage,
         })
         audit_log.end_session({"status": "completed", "output_dir": output_dir})
 
@@ -299,10 +303,15 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> N
                         steering_checker=check_steering,
                     ),
                 )
+
+                result_text = result.get("text", "") if isinstance(result, dict) else str(result)
+                token_usage = result.get("token_usage") if isinstance(result, dict) else None
+
                 session.complete()
                 emit("complete", {
-                    "summary": {"report": result[:2000] if result else ""},
+                    "summary": {"report": result_text[:2000] if result_text else ""},
                     "output_dir": output_dir,
+                    "token_usage": token_usage,
                 })
                 audit_log.end_session({"status": "completed_after_retry", "output_dir": output_dir})
                 return
@@ -426,6 +435,32 @@ async def discard_resume():
     """Discard the saved checkpoint so user can start a fresh conversion."""
     Session.clear_checkpoint()
     return {"cleared": True}
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/v1/files — Delete all input and output files for a fresh start
+# ---------------------------------------------------------------------------
+@app.delete("/api/v1/files")
+async def clear_files():
+    """Delete all files in the input and output directories for a fresh start."""
+    import shutil
+    deleted = {"input": 0, "output": 0}
+
+    for label, dir_path in [("input", settings.INPUT_DIR), ("output", settings.OUTPUT_DIR)]:
+        p = Path(dir_path)
+        if p.exists():
+            for item in p.iterdir():
+                try:
+                    if item.is_file():
+                        item.unlink()
+                    elif item.is_dir():
+                        shutil.rmtree(item)
+                    deleted[label] += 1
+                except Exception as exc:
+                    logger.warning(f"Failed to delete {item}: {exc}")
+
+    logger.info(f"Cleared files: {deleted['input']} input, {deleted['output']} output")
+    return {"cleared": True, **deleted}
 
 
 # ---------------------------------------------------------------------------
