@@ -614,7 +614,7 @@ async def get_file_content(path: str):
         Path("Data").resolve(),
     ]
     resolved = file_path.resolve()
-    if not any(str(resolved).startswith(str(root)) for root in allowed_roots):
+    if not any(resolved.is_relative_to(root) for root in allowed_roots):
         raise HTTPException(status_code=403, detail="Access denied: path outside allowed directories")
 
     try:
