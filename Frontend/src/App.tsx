@@ -314,7 +314,13 @@ export default function App() {
         >
           <StepTimeline currentPhase={state.phase} isRunning={state.isRunning} sessionStatus={sessionStatus} />
           <div className="px-3 pb-3 flex flex-col gap-3">
-            <PlanChecklist items={state.planItems} progressPct={state.progressPct} />
+            <PlanChecklist
+              items={state.planItems}
+              progressPct={state.progressPct}
+              phases={state.planPhases}
+              guidelines={state.conversionGuidelines}
+              prevItemStatuses={state.prevItemStatuses}
+            />
             <ScoreDashboard scores={state.scores} />
           </div>
         </aside>

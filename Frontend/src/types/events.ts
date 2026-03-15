@@ -38,6 +38,27 @@ export interface ToolResultEvent {
   phase?: string
 }
 
+export interface ConversionNotes {
+  data_mapping_strategy?: string
+  control_flow_strategy?: string
+  io_strategy?: string
+  sql_strategy?: string | null
+  cics_strategy?: string | null
+  testing_notes?: string
+  risk_factors?: string[]
+  description?: string
+}
+
+export interface PhaseSummary {
+  count: number
+  total_loc: number
+  items: string[]
+}
+
+export interface ConversionGuidelines {
+  [key: string]: string | undefined
+}
+
 export interface PlanItem {
   id: string
   title: string
@@ -46,12 +67,18 @@ export interface PlanItem {
   program_id: string
   complexity: string
   score?: number
+  priority?: string
+  estimated_loc?: number
+  depends_on?: string[]
+  conversion_notes?: ConversionNotes
 }
 
 export interface PlanUpdateEvent {
   plan_id: string
   items: PlanItem[]
   progress_pct: number
+  phases?: Record<string, PhaseSummary>
+  conversion_guidelines?: ConversionGuidelines
 }
 
 export interface ScoreIssue {

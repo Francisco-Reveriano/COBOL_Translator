@@ -23,6 +23,8 @@ import sys
 import json
 import logging
 import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -42,7 +44,7 @@ from Tools.cobol_converter import cobol_converter, cobol_refiner
 from Tools.plan_tracker import plan_tracker
 from Tools.validation_checker import validation_checker
 from Tools.quality_scorer import quality_scorer
-from Prompts.system_prompts import MASTER_AGENT_PROMPT
+from Prompts.system_prompts import MASTER_AGENT_PROMPT, SINGLE_PROGRAM_PROMPT
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -231,11 +233,42 @@ def create_agent(
 # ---------------------------------------------------------------------------
 # Conversion Runner
 # ---------------------------------------------------------------------------
-def build_conversion_prompt(cobol_dir: str, output_dir: str = "./output") -> str:
-    """Build the master prompt that drives the full agentic loop."""
+def build_conversion_prompt(cobol_dir: str, output_dir: str = "./output", resume: bool = False) -> str:
+    """Build the master prompt that drives the full agentic loop.
+
+    Args:
+        cobol_dir: Directory containing COBOL source files.
+        output_dir: Directory for conversion output.
+        resume: If True, read existing plan and instruct agent to skip completed items.
+    """
+    # Build resume instructions if recovering from a previous run
+    resume_instructions = ""
+    if resume:
+        plan_path = Path(output_dir) / "conversion_plan.json"
+        if plan_path.exists():
+            try:
+                plan = json.loads(plan_path.read_text())
+                items = plan.get("items", [])
+                completed_ids = [
+                    item["id"] for item in items
+                    if item.get("status") in ("completed", "skipped")
+                ]
+                if completed_ids:
+                    resume_instructions = f"""
+IMPORTANT — RESUMING FROM CHECKPOINT:
+The following {len(completed_ids)} items are already completed from a previous run.
+Skip steps 1 (scan) and 2 (plan) — the plan already exists on disk.
+In step 3, plan_tracker(action="next") will automatically skip completed items.
+Completed item IDs: {', '.join(completed_ids)}
+
+Start directly with step 3 by calling plan_tracker(action="next", output_dir="{output_dir}").
+"""
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning(f"Failed to read plan for resume: {e}")
+
     return f"""
 You are starting a COBOL-to-Python migration. Follow these steps exactly:
-
+{resume_instructions}
 1. Use `cobol_scanner(directory="{cobol_dir}", output_dir="{output_dir}")` to scan all COBOL files
 2. Use `conversion_planner(output_dir="{output_dir}")` to create a structured conversion plan
 3. For each item in the plan:
@@ -254,7 +287,7 @@ You are starting a COBOL-to-Python migration. Follow these steps exactly:
 4. After all conversions, use `validation_checker(output_dir="{output_dir}")` to verify the output
 5. Provide a final migration summary report including all quality scores
 
-Begin now by scanning the COBOL source directory.
+Begin now{" by resuming from checkpoint." if resume else " by scanning the COBOL source directory."}
 """
 
 
@@ -296,6 +329,7 @@ def run_conversion(
     event_callback: Optional[EventCallback] = None,
     steering_checker: Optional[Callable[[], dict]] = None,
     skip_scan: bool = False,
+    resume: bool = False,
 ) -> dict:
     """
     Master loop: scan → plan → convert → validate → report.
@@ -308,12 +342,20 @@ def run_conversion(
                           keys: pause_requested, skip_requested, retry_item_id.
                           Called between agent invocations for steering control.
         skip_scan: If True, skip scanning (scan_results.json already exists).
+        resume: If True, resume from a previous checkpoint instead of starting fresh.
 
     Returns:
         The agent's final response as a string.
     """
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+
+    # Reset in-memory state for fresh conversions (not resumes)
+    if not resume:
+        from Tools.plan_tracker import reset_plan_state
+        from Tools.tool_helpers import ConversionContext
+        reset_plan_state()
+        ConversionContext.reset()
 
     # Wire SSE event callbacks into tool modules so they emit live updates
     if event_callback:
@@ -329,7 +371,7 @@ def run_conversion(
     if skip_scan:
         prompt = build_conversion_prompt_skip_scan(cobol_dir, output_dir)
     else:
-        prompt = build_conversion_prompt(cobol_dir, output_dir)
+        prompt = build_conversion_prompt(cobol_dir, output_dir, resume=resume)
 
     logger.info("Starting COBOL-to-Python conversion agent...")
     logger.info(f"   Source: {cobol_dir}")
@@ -355,6 +397,231 @@ def run_conversion(
 
 
 # ---------------------------------------------------------------------------
+# Parallel Conversion Orchestrator
+# ---------------------------------------------------------------------------
+MAX_PARALLEL_AGENTS = 3
+
+
+def _compute_dependency_levels(items: list[dict]) -> list[list[dict]]:
+    """Group plan items into dependency levels for parallel execution.
+
+    Level 0: items with no dependencies (or only completed deps)
+    Level 1: items depending on level-0 items, etc.
+    Integration and validation items are excluded (run sequentially after).
+    """
+    # Filter to convertible items only
+    convertible = [
+        item for item in items
+        if item["phase"] in ("shared_modules", "core_programs")
+    ]
+
+    id_to_item = {item["id"]: item for item in convertible}
+    assigned: set[str] = set()
+    levels: list[list[dict]] = []
+
+    while len(assigned) < len(convertible):
+        current_level = []
+        for item in convertible:
+            if item["id"] in assigned:
+                continue
+            deps = item.get("depends_on", [])
+            # Ready if all deps are either assigned or not in convertible set
+            if all(d in assigned or d not in id_to_item for d in deps):
+                current_level.append(item)
+
+        if not current_level:
+            # Remaining items have circular deps — add them all
+            current_level = [item for item in convertible if item["id"] not in assigned]
+
+        for item in current_level:
+            assigned.add(item["id"])
+        levels.append(current_level)
+
+    return levels
+
+
+def _build_single_program_prompt(item: dict, output_dir: str) -> str:
+    """Build a prompt for converting a single program."""
+    return f"""Convert the following COBOL program to Python:
+
+1. `plan_tracker(action="update_status", item_id="{item['id']}", new_status="in_progress", output_dir="{output_dir}")`
+2. `cobol_converter(source_file="{item['source_file']}", target_file="{item['target_file']}", program_id="{item['program_id']}", item_id="{item['id']}", output_dir="{output_dir}")`
+3. Generate the full Python module based on the COBOL source and conversion notes
+4. `quality_scorer(module_name="{item['program_id']}", cobol_source=<the COBOL source from step 2>, python_output=<your Python code>, output_dir="{output_dir}", target_file="{item['target_file']}")`
+5. REFINEMENT LOOP — target score >= 95.0, max 3 attempts:
+   If score < 95.0 and attempt < 3:
+     a. `cobol_refiner(source_file="{item['source_file']}", target_file="{item['target_file']}", program_id="{item['program_id']}", attempt=<1,2,3>, output_dir="{output_dir}")`
+     b. Generate improved Python addressing all issues
+     c. Re-score with `quality_scorer`
+6. `plan_tracker(action="update_status", item_id="{item['id']}", new_status="completed", output_dir="{output_dir}")`
+
+Begin now.
+"""
+
+
+def _create_single_program_agent(
+    event_callback: Optional[EventCallback] = None,
+    output_dir: str = "./output",
+) -> Agent:
+    """Create a lightweight agent for converting a single program."""
+    model = create_model()
+
+    if event_callback:
+        handler = SSEStreamHandler(event_callback)
+        handler._current_phase = "convert"
+    else:
+        handler = CLIStreamHandler()
+
+    return Agent(
+        model=model,
+        system_prompt=SINGLE_PROGRAM_PROMPT.format(output_dir=output_dir),
+        tools=[
+            cobol_converter,
+            cobol_refiner,
+            plan_tracker,
+            quality_scorer,
+        ],
+        callback_handler=handler,
+    )
+
+
+def _convert_single_program(
+    item: dict,
+    output_dir: str,
+    event_callback: Optional[EventCallback] = None,
+) -> dict:
+    """Convert a single program in its own agent instance."""
+    agent = _create_single_program_agent(event_callback=event_callback, output_dir=output_dir)
+    prompt = _build_single_program_prompt(item, output_dir)
+
+    logger.info(f"[parallel] Starting conversion of {item['program_id']} (item {item['id']})")
+    try:
+        result = agent(prompt)
+        logger.info(f"[parallel] Completed {item['program_id']}")
+        return {"item_id": item["id"], "program_id": item["program_id"], "success": True}
+    except Exception as e:
+        logger.error(f"[parallel] Failed {item['program_id']}: {e}")
+        return {"item_id": item["id"], "program_id": item["program_id"], "success": False, "error": str(e)}
+
+
+def run_parallel_conversion(
+    cobol_dir: str,
+    output_dir: str = "./output",
+    event_callback: Optional[EventCallback] = None,
+    steering_checker: Optional[Callable[[], dict]] = None,
+    max_workers: int = MAX_PARALLEL_AGENTS,
+) -> dict:
+    """Parallel conversion: scan+plan sequentially, convert in parallel batches, validate+report sequentially.
+
+    Args:
+        cobol_dir: Directory containing COBOL source files.
+        output_dir: Directory for conversion output.
+        event_callback: Optional SSE event callback for API mode.
+        steering_checker: Optional steering state callable.
+        max_workers: Maximum concurrent agent instances.
+
+    Returns:
+        Dict with report text and token usage.
+    """
+    from Tools.plan_tracker import reset_plan_state, set_event_callback as set_plan_cb
+    from Tools.quality_scorer import set_event_callback as set_score_cb
+    from Tools.conversion_planner import set_event_callback as set_planner_cb
+    from Tools.tool_helpers import ConversionContext
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Reset state
+    reset_plan_state()
+    ConversionContext.reset()
+
+    # Wire SSE callbacks
+    if event_callback:
+        set_plan_cb(event_callback)
+        set_score_cb(event_callback)
+        set_planner_cb(event_callback)
+
+    # ── Phase 1-2: Scan + Plan (sequential) ─────────────────────────────
+    logger.info("[parallel] Phase 1-2: Scanning and planning...")
+    scan_plan_agent = create_agent(event_callback=event_callback, output_dir=output_dir)
+    scan_plan_prompt = f"""
+Run ONLY the scan and plan phases:
+1. `cobol_scanner(directory="{cobol_dir}", output_dir="{output_dir}")`
+2. `conversion_planner(output_dir="{output_dir}")`
+3. `plan_tracker(action="view", output_dir="{output_dir}")`
+Stop after displaying the plan. Do NOT start converting programs.
+"""
+    scan_plan_agent(scan_plan_prompt)
+
+    # Load the plan
+    plan_path = output_path / "conversion_plan.json"
+    if not plan_path.exists():
+        raise RuntimeError("Plan file not created after scan+plan phase")
+    plan = json.loads(plan_path.read_text())
+    items = plan.get("items", [])
+
+    # ── Phase 3: Convert in parallel batches ─────────────────────────────
+    levels = _compute_dependency_levels(items)
+    logger.info(f"[parallel] {len(levels)} dependency level(s), {max_workers} max workers")
+
+    all_results = []
+    for level_idx, level_items in enumerate(levels):
+        logger.info(f"[parallel] Level {level_idx}: {len(level_items)} program(s)")
+
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(level_items))) as executor:
+            futures = {
+                executor.submit(
+                    _convert_single_program, item, output_dir, event_callback
+                ): item
+                for item in level_items
+            }
+            for future in as_completed(futures):
+                result = future.result()
+                all_results.append(result)
+                if not result["success"]:
+                    logger.warning(f"[parallel] {result['program_id']} failed: {result.get('error')}")
+
+    # ── Phase 4-5: Validate + Report (sequential) ───────────────────────
+    # Handle integration and validation plan items
+    post_items = [item for item in items if item["phase"] in ("integration", "validation")]
+    for item in post_items:
+        from Tools.plan_tracker import plan_tracker as pt_tool
+        pt_tool(action="update_status", item_id=item["id"], new_status="completed", output_dir=output_dir)
+
+    logger.info("[parallel] Phase 4-5: Validation and reporting...")
+    report_agent = create_agent(event_callback=event_callback, output_dir=output_dir)
+    report_prompt = f"""
+The conversion phase is complete. Run ONLY the validation and report phases:
+1. `validation_checker(output_dir="{output_dir}")`
+2. Provide a final migration summary report with all quality scores.
+Do NOT re-convert any programs.
+"""
+    result = report_agent(report_prompt)
+    result_text = str(result)
+
+    # Save report
+    report_path = output_path / "migration_report.md"
+    report_path.write_text(result_text)
+    logger.info(f"Migration report saved to {report_path}")
+
+    # Aggregate results
+    succeeded = sum(1 for r in all_results if r["success"])
+    failed = sum(1 for r in all_results if not r["success"])
+
+    return {
+        "text": result_text,
+        "token_usage": None,
+        "parallel_stats": {
+            "total_programs": len(all_results),
+            "succeeded": succeeded,
+            "failed": failed,
+            "levels": len(levels),
+            "max_workers": max_workers,
+        },
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -363,6 +630,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="COBOL-to-Python Conversion Agent")
     parser.add_argument("cobol_dir", help="Directory containing COBOL source files")
     parser.add_argument("--output", default="./output", help="Output directory for Python files")
+    parser.add_argument("--parallel", action="store_true", help="Run independent programs in parallel")
+    parser.add_argument("--workers", type=int, default=MAX_PARALLEL_AGENTS, help="Max parallel agent instances")
+    parser.add_argument("--state-machine", action="store_true", help="Use explicit state machine instead of prompt-driven loop")
     args = parser.parse_args()
 
-    run_conversion(args.cobol_dir, args.output)
+    if args.parallel:
+        run_parallel_conversion(args.cobol_dir, args.output, max_workers=args.workers)
+    elif args.state_machine:
+        from state_machine import run_state_machine_conversion
+        run_state_machine_conversion(args.cobol_dir, args.output)
+    else:
+        run_conversion(args.cobol_dir, args.output)

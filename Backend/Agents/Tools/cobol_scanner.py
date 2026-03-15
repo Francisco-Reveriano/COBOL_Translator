@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Any
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result, ConversionContext
 
 
 # ---------------------------------------------------------------------------
@@ -220,11 +220,13 @@ def cobol_scanner(directory: str, output_dir: str = "./output") -> dict:
         "errors": errors,
     }
 
-    # Persist full scan data to disk for downstream tools
+    # Persist full scan data to disk and in-memory cache for downstream tools
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     scan_file = out_path / "scan_results.json"
-    scan_file.write_text(json.dumps(result_data, indent=2, default=str))
+    ConversionContext.instance().set(
+        "scan_results", result_data, persist_path=str(scan_file)
+    )
 
     # Build markdown summary for the LLM
     md_lines = ["## COBOL Scan Results", ""]

@@ -25,6 +25,8 @@ import json
 import logging
 import os
 import re
+import threading
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -36,12 +38,20 @@ logger = logging.getLogger(__name__)
 
 # Module-level SSE event callback (set by agent factory)
 _event_callback: Callable[[str, dict[str, Any]], None] | None = None
+_callback_lock = threading.Lock()
 
 
 def set_event_callback(cb: Callable[[str, dict[str, Any]], None] | None) -> None:
     """Wire the SSE event callback from the agent factory."""
     global _event_callback
-    _event_callback = cb
+    with _callback_lock:
+        _event_callback = cb
+
+
+def _get_event_callback() -> Callable[[str, dict[str, Any]], None] | None:
+    """Thread-safe read of the event callback."""
+    with _callback_lock:
+        return _event_callback
 
 # ---------------------------------------------------------------------------
 # Scoring Constants
@@ -173,13 +183,21 @@ def _determine_threshold(overall: float) -> str:
 # ---------------------------------------------------------------------------
 # GPT-5.2-Codex Scoring (FR-3.1)
 # ---------------------------------------------------------------------------
+RETRY_MAX_ATTEMPTS = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+
+
 def _score_with_codex(
     module_name: str,
     cobol_source: str,
     python_output: str,
     conversion_notes: str,
 ) -> dict:
-    """Call GPT-5.2-Codex via the Responses API with structured output."""
+    """Call GPT-5.2-Codex via the Responses API with structured output.
+
+    Retries up to 3 times with exponential backoff on transient API errors
+    (rate limits, timeouts, connection errors) before raising.
+    """
     import openai
 
     client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -201,25 +219,45 @@ def _score_with_codex(
 
 Score this COBOL-to-Python conversion on all 4 dimensions."""
 
-    response = client.responses.create(
-        model=SCORE_MODEL,
-        input=[
-            {"role": "developer", "content": SCORING_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": SCORE_JSON_SCHEMA["name"],
-                "strict": SCORE_JSON_SCHEMA["strict"],
-                "schema": SCORE_JSON_SCHEMA["schema"],
-            }
-        },
-        reasoning={"effort": "high"},  # FR-3.7
-    )
+    last_error: Exception | None = None
+    for attempt in range(1, RETRY_MAX_ATTEMPTS + 1):
+        try:
+            response = client.responses.create(
+                model=SCORE_MODEL,
+                input=[
+                    {"role": "developer", "content": SCORING_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": SCORE_JSON_SCHEMA["name"],
+                        "strict": SCORE_JSON_SCHEMA["strict"],
+                        "schema": SCORE_JSON_SCHEMA["schema"],
+                    }
+                },
+                reasoning={"effort": "high"},  # FR-3.7
+            )
 
-    content = response.output_text
-    return json.loads(content)
+            content = response.output_text
+            return json.loads(content)
+
+        except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError) as e:
+            last_error = e
+            if attempt < RETRY_MAX_ATTEMPTS:
+                delay = RETRY_BASE_DELAY * (2 ** (attempt - 1))
+                logger.warning(
+                    f"OpenAI scoring attempt {attempt}/{RETRY_MAX_ATTEMPTS} failed "
+                    f"for {module_name}: {e}. Retrying in {delay:.1f}s..."
+                )
+                time.sleep(delay)
+            else:
+                logger.warning(
+                    f"OpenAI scoring failed after {RETRY_MAX_ATTEMPTS} attempts "
+                    f"for {module_name}: {e}"
+                )
+
+    raise last_error  # type: ignore[misc]
 
 
 # ---------------------------------------------------------------------------
@@ -397,9 +435,10 @@ def quality_scorer(
         module_score_file = scores_dir / f"{module_name}.json"
         module_score_file.write_text(json.dumps(cached, indent=2, default=str))
 
-        if _event_callback:
+        cb = _get_event_callback()
+        if cb:
             try:
-                _event_callback("score", {
+                cb("score", {
                     "module": cached["module"],
                     "scores": cached["scores"],
                     "overall": cached["overall"],
@@ -474,9 +513,10 @@ def quality_scorer(
     module_score_file.write_text(json.dumps(score_result, indent=2, default=str))
 
     # Emit score SSE event for real-time UI updates
-    if _event_callback:
+    cb = _get_event_callback()
+    if cb:
         try:
-            _event_callback("score", {
+            cb("score", {
                 "module": score_result["module"],
                 "scores": score_result["scores"],
                 "overall": score_result["overall"],
@@ -522,5 +562,7 @@ def quality_scorer(
 
     md_lines.append("")
     md_lines.append(f"> Score saved to `{module_score_file}`")
+    if resolved_target:
+        md_lines.append(f"> Python output at `{resolved_target}` (not echoed to reduce context)")
 
     return markdown_result("\n".join(md_lines))

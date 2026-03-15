@@ -6,8 +6,51 @@
  * Click a score card to expand detailed issues, remediation, and summary.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ScoreEvent, ScoreIssue } from '../types/events'
+
+// ---------------------------------------------------------------------------
+// useAnimatedNumber — tick from old value to new with ease-out cubic
+// ---------------------------------------------------------------------------
+function useAnimatedNumber(target: number, durationMs = 600): { value: number; animating: boolean } {
+  const [display, setDisplay] = useState(target)
+  const [animating, setAnimating] = useState(false)
+  const prevRef = useRef(target)
+  const rafRef = useRef<number>(0)
+
+  const animate = useCallback((from: number, to: number) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    setAnimating(true)
+    const start = performance.now()
+    const tick = (now: number) => {
+      const elapsed = now - start
+      const t = Math.min(elapsed / durationMs, 1)
+      // ease-out cubic: 1 - (1-t)^3
+      const eased = 1 - Math.pow(1 - t, 3)
+      setDisplay(from + (to - from) * eased)
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick)
+      } else {
+        setDisplay(to)
+        setAnimating(false)
+      }
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }, [durationMs])
+
+  useEffect(() => {
+    if (target !== prevRef.current) {
+      animate(prevRef.current, target)
+      prevRef.current = target
+    }
+  }, [target, animate])
+
+  useEffect(() => {
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [])
+
+  return { value: display, animating }
+}
 
 interface ScoreDashboardProps {
   scores: ScoreEvent[]
@@ -211,14 +254,20 @@ function DimBadge({ label, value }: { label: string; value: number }) {
 }
 
 function OverallBadge({ score, label, animate }: { score: number; label?: string; animate?: boolean }) {
+  const { value: displayScore, animating: ticking } = useAnimatedNumber(score)
   const color =
-    score >= 85 ? 'var(--score-green)' : score >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
+    displayScore >= 85 ? 'var(--score-green)' : displayScore >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
+  const cssClass = [
+    'text-[10px] font-bold px-1.5 py-0.5 rounded',
+    animate ? 'score-badge-animate score-ring-animate' : '',
+    ticking ? 'score-tick-up' : '',
+  ].filter(Boolean).join(' ')
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${animate ? 'score-badge-animate score-ring-animate' : ''}`}
+      className={cssClass}
       style={{ color, border: `1px solid ${color}` }}
     >
-      {score.toFixed(1)}{label ? ` ${label}` : ''}
+      {displayScore.toFixed(1)}{label ? ` ${label}` : ''}
     </span>
   )
 }

@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight, Clock, RefreshCw, Target, Wrench, Zap } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { ActivityEntry } from '../stores/conversionStore'
@@ -64,25 +65,35 @@ function groupActivities(activities: ActivityEntry[]): ActivityGroup[] {
   return groups
 }
 
+// Estimated row heights by group type for the virtualizer
+const ESTIMATED_ROW_HEIGHT = 56
+
 export function StreamingPanel({ activities, isRunning }: StreamingPanelProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [autoScroll, setAutoScroll] = useState(true)
 
-  useEffect(() => {
-    if (autoScroll && bottomRef.current) {
-      bottomRef.current.scrollIntoView({ behavior: 'smooth' })
-    }
-  }, [activities, autoScroll])
+  const groups = useMemo(() => groupActivities(activities), [activities])
 
-  const handleScroll = () => {
+  const virtualizer = useVirtualizer({
+    count: groups.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => ESTIMATED_ROW_HEIGHT,
+    overscan: 10,
+  })
+
+  // Auto-scroll to bottom when new items arrive
+  useEffect(() => {
+    if (autoScroll && groups.length > 0) {
+      virtualizer.scrollToIndex(groups.length - 1, { align: 'end', behavior: 'smooth' })
+    }
+  }, [groups.length, autoScroll, virtualizer])
+
+  const handleScroll = useCallback(() => {
     const el = containerRef.current
     if (!el) return
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
     setAutoScroll(atBottom)
-  }
-
-  const groups = useMemo(() => groupActivities(activities), [activities])
+  }, [])
 
   return (
     <div
@@ -97,29 +108,41 @@ export function StreamingPanel({ activities, isRunning }: StreamingPanelProps) {
         </p>
       )}
 
-      {groups.map((group, gi) => {
-        if (group.type === 'separator') {
-          return <StageSeparator key={`sep-${gi}`} phase={group.phase || ''} />
-        }
-
-        if (group.type === 'burst') {
-          return <BurstGroup key={`burst-${gi}`} entries={group.entries} />
-        }
-
-        return group.entries.map(entry => (
-          <ActivityItem key={entry.id} entry={entry} />
-        ))
-      })}
+      <div
+        style={{
+          height: `${virtualizer.getTotalSize()}px`,
+          width: '100%',
+          position: 'relative',
+        }}
+      >
+        {virtualizer.getVirtualItems().map(virtualRow => {
+          const group = groups[virtualRow.index]
+          return (
+            <div
+              key={virtualRow.key}
+              data-index={virtualRow.index}
+              ref={virtualizer.measureElement}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                transform: `translateY(${virtualRow.start}px)`,
+              }}
+            >
+              <GroupRenderer group={group} />
+            </div>
+          )
+        })}
+      </div>
 
       {isRunning && <span className="typewriter-cursor" />}
-
-      <div ref={bottomRef} />
 
       {!autoScroll && (
         <button
           onClick={() => {
             setAutoScroll(true)
-            bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+            virtualizer.scrollToIndex(groups.length - 1, { align: 'end', behavior: 'smooth' })
           }}
           className="fixed bottom-20 right-8 px-3 py-1.5 rounded-full text-xs font-medium shadow-lg"
           style={{ backgroundColor: 'var(--accent)', color: '#fff' }}
@@ -128,6 +151,25 @@ export function StreamingPanel({ activities, isRunning }: StreamingPanelProps) {
         </button>
       )}
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Group renderer — dispatches to separator, burst, or item
+// ---------------------------------------------------------------------------
+function GroupRenderer({ group }: { group: ActivityGroup }) {
+  if (group.type === 'separator') {
+    return <StageSeparator phase={group.phase || ''} />
+  }
+  if (group.type === 'burst') {
+    return <BurstGroup entries={group.entries} />
+  }
+  return (
+    <>
+      {group.entries.map(entry => (
+        <ActivityItem key={entry.id} entry={entry} />
+      ))}
+    </>
   )
 }
 

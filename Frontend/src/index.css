@@ -395,6 +395,69 @@ body {
   border-radius: 0 4px 4px 0;
 }
 
+/* ── Plan panel animations ───────────────────────────────────── */
+
+/* Green background flash when an item completes */
+@keyframes plan-item-complete-flash {
+  0%   { background-color: transparent; }
+  15%  { background-color: color-mix(in srgb, var(--score-green) 15%, transparent); }
+  100% { background-color: transparent; }
+}
+.plan-item-complete {
+  animation: plan-item-complete-flash var(--motion-slow) var(--ease-out-expo);
+}
+
+/* Blue pulse when an item becomes in_progress */
+@keyframes plan-item-activate-pulse {
+  0%   { background-color: transparent; }
+  8%   { background-color: color-mix(in srgb, var(--accent) 8%, transparent); }
+  100% { background-color: color-mix(in srgb, var(--accent) 5%, transparent); }
+}
+.plan-item-activate {
+  animation: plan-item-activate-pulse var(--motion-slow) var(--ease-out-expo) forwards;
+}
+
+/* Green inset glow on phase header when all items completed */
+.plan-phase-complete > div:first-child {
+  box-shadow: inset 0 0 8px color-mix(in srgb, var(--score-green) 20%, transparent);
+}
+
+/* Slide-expand for item detail panel */
+@keyframes plan-item-expand-anim {
+  0%   { opacity: 0; max-height: 0; }
+  100% { opacity: 1; max-height: 300px; }
+}
+.plan-item-expand {
+  animation: plan-item-expand-anim var(--motion-fast) var(--ease-out-expo) forwards;
+  overflow: hidden;
+}
+
+/* Progress bar shimmer sweep */
+@keyframes progress-bar-sweep-anim {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.progress-bar-sweep {
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.15) 50%,
+    transparent 100%
+  );
+  background-size: 50% 100%;
+  animation: progress-bar-sweep-anim 2s linear infinite;
+}
+
+/* Score tick-up animation */
+@keyframes score-tick-up-anim {
+  0%   { transform: scale(0.8); opacity: 0.3; }
+  60%  { transform: scale(1.1); opacity: 1; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.score-tick-up {
+  animation: score-tick-up-anim var(--motion-slow) var(--ease-spring);
+}
+
 /* ── React Flow overrides ────────────────────────────────────── */
 .react-flow__background {
   background-color: var(--bg-primary) !important;

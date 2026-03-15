@@ -430,6 +430,7 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False, skip
                 event_callback=emit,
                 steering_checker=check_steering,
                 skip_scan=skip_scan,
+                resume=resume,
             ),
         )
 
@@ -459,7 +460,7 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False, skip
             event_bus.emit("error", error_payload)
             audit_log.log_event("error", error_payload)
 
-            # Retry the agent
+            # Retry the agent — resume from checkpoint to skip completed items
             try:
                 loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(
@@ -469,6 +470,7 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False, skip
                         event_callback=emit,
                         steering_checker=check_steering,
                         skip_scan=skip_scan,
+                        resume=True,
                     ),
                 )
 

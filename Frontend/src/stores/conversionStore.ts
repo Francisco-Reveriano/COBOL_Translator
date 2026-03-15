@@ -1,8 +1,10 @@
 import { useCallback, useReducer } from 'react'
 import type {
   CompleteEvent,
+  ConversionGuidelines,
   ErrorEvent,
   FlowchartEvent,
+  PhaseSummary,
   PlanItem,
   PlanUpdateEvent,
   ReasoningEvent,
@@ -38,6 +40,12 @@ export interface ConversionState {
   planItems: PlanItem[]
   planId: string
   progressPct: number
+  /** Plan phase summaries */
+  planPhases: Record<string, PhaseSummary>
+  /** Global conversion guidelines */
+  conversionGuidelines: ConversionGuidelines
+  /** Previous item statuses for animation triggers */
+  prevItemStatuses: Record<string, string>
   /** Quality scores per module */
   scores: ScoreEvent[]
   /** React Flow graph data */
@@ -75,6 +83,9 @@ const initialState: ConversionState = {
   planItems: [],
   planId: '',
   progressPct: 0,
+  planPhases: {},
+  conversionGuidelines: {},
+  prevItemStatuses: {},
   scores: [],
   flowNodes: [],
   flowEdges: [],
@@ -183,11 +194,19 @@ function reducer(state: ConversionState, action: Action): ConversionState {
       const inProgressItem = action.payload.items.find(
         (i: PlanItem) => i.status === 'in_progress'
       )
+      // Capture old item statuses for animation triggers
+      const oldStatuses: Record<string, string> = {}
+      for (const item of state.planItems) {
+        oldStatuses[item.id] = item.status
+      }
       return {
         ...state,
         planId: action.payload.plan_id,
         planItems: action.payload.items,
         progressPct: action.payload.progress_pct,
+        prevItemStatuses: oldStatuses,
+        planPhases: action.payload.phases ?? state.planPhases,
+        conversionGuidelines: action.payload.conversion_guidelines ?? state.conversionGuidelines,
         currentItemId: inProgressItem?.program_id || inProgressItem?.id || state.currentItemId,
       }
     }

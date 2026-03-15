@@ -15,37 +15,55 @@ state as system messages after each tool use.
 
 import json
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result, ConversionContext
 
 logger = logging.getLogger(__name__)
 
 # In-memory plan state (persisted to disk on each update)
 _plan_state: dict = {}
+_plan_lock = threading.Lock()
 
 # Module-level SSE event callback (set by agent factory)
 _event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None
+_callback_lock = threading.Lock()
 
 
 def set_event_callback(cb: Optional[Callable[[str, dict[str, Any]], None]]) -> None:
     """Wire the SSE event callback from the agent factory."""
     global _event_callback
-    _event_callback = cb
+    with _callback_lock:
+        _event_callback = cb
+
+
+def _get_event_callback() -> Optional[Callable[[str, dict[str, Any]], None]]:
+    """Thread-safe read of the event callback."""
+    with _callback_lock:
+        return _event_callback
+
+
+def reset_plan_state() -> None:
+    """Clear the in-memory plan state for a fresh conversion."""
+    global _plan_state
+    with _plan_lock:
+        _plan_state = {}
 
 
 def _emit_plan_update() -> None:
     """Emit a plan_update SSE event with current plan state."""
-    if not _event_callback or not _plan_state.get("items"):
+    cb = _get_event_callback()
+    if not cb or not _plan_state.get("items"):
         return
     items = _plan_state["items"]
     total = len(items)
     completed = sum(1 for i in items if i["status"] in ("completed", "skipped"))
     progress_pct = round(completed / total * 100, 1) if total else 0
     try:
-        _event_callback("plan_update", {
+        cb("plan_update", {
             "plan_id": _plan_state.get("plan_id", ""),
             "items": [
                 {
@@ -55,10 +73,16 @@ def _emit_plan_update() -> None:
                     "phase": i["phase"],
                     "program_id": i["program_id"],
                     "complexity": i.get("complexity", ""),
+                    "priority": i.get("priority", "P2"),
+                    "estimated_loc": i.get("estimated_loc", 0),
+                    "depends_on": i.get("depends_on", []),
+                    "conversion_notes": i.get("conversion_notes", {}),
                 }
                 for i in items
             ],
             "progress_pct": progress_pct,
+            "phases": _plan_state.get("phases", {}),
+            "conversion_guidelines": _plan_state.get("conversion_guidelines", {}),
         })
     except Exception as e:
         logger.warning(f"Failed to emit plan_update: {e}")
@@ -66,7 +90,8 @@ def _emit_plan_update() -> None:
 
 def _emit_flowchart_update() -> None:
     """Emit a flowchart SSE event with current node statuses from the plan."""
-    if not _event_callback or not _plan_state.get("items"):
+    cb = _get_event_callback()
+    if not cb or not _plan_state.get("items"):
         return
     dep_graph = _plan_state.get("dependency_graph", {})
     graph_nodes = dep_graph.get("nodes", [])
@@ -82,7 +107,7 @@ def _emit_flowchart_update() -> None:
             item_status[pid] = item["status"]
 
     try:
-        _event_callback("flowchart", {
+        cb("flowchart", {
             "nodes": [
                 {
                     "id": n["id"],
@@ -112,23 +137,30 @@ def _emit_flowchart_update() -> None:
 
 
 def _load_plan(output_dir: str) -> dict:
-    """Load plan from disk if not in memory."""
+    """Load plan from in-memory cache (falls back to disk)."""
     global _plan_state
-    if _plan_state and _plan_state.get("plan_id"):
-        return _plan_state
+    with _plan_lock:
+        if _plan_state and _plan_state.get("plan_id"):
+            return _plan_state
 
-    plan_path = Path(output_dir) / "conversion_plan.json"
-    if plan_path.exists():
-        _plan_state = json.loads(plan_path.read_text())
-        return _plan_state
+        # Try in-memory context first, then disk
+        ctx = ConversionContext.instance()
+        plan_path = str(Path(output_dir) / "conversion_plan.json")
+        cached = ctx.get("conversion_plan", fallback_path=plan_path)
+        if cached:
+            _plan_state = cached
+            return _plan_state
 
     return {"error": "No plan found. Run conversion_planner first."}
 
 
 def _save_plan(output_dir: str):
-    """Persist current plan state to disk."""
-    plan_path = Path(output_dir) / "conversion_plan.json"
-    plan_path.write_text(json.dumps(_plan_state, indent=2, default=str))
+    """Persist current plan state to disk and in-memory cache."""
+    with _plan_lock:
+        plan_path = str(Path(output_dir) / "conversion_plan.json")
+        ConversionContext.instance().set(
+            "conversion_plan", _plan_state, persist_path=plan_path
+        )
 
 
 def _get_status_emoji(status: str) -> str:
@@ -271,35 +303,38 @@ def plan_tracker(
         if new_status not in valid_statuses:
             return strands_result({"error": f"Invalid status. Must be one of: {valid_statuses}"}, status="error")
 
-        for item in _plan_state["items"]:
-            if item["id"] == item_id:
-                old_status = item["status"]
-                item["status"] = new_status
+        with _plan_lock:
+            for item in _plan_state["items"]:
+                if item["id"] == item_id:
+                    old_status = item["status"]
+                    item["status"] = new_status
 
-                if new_status == "in_progress":
-                    item["started_at"] = datetime.now().isoformat()
-                elif new_status == "completed":
-                    item["completed_at"] = datetime.now().isoformat()
+                    if new_status == "in_progress":
+                        item["started_at"] = datetime.now().isoformat()
+                    elif new_status == "completed":
+                        item["completed_at"] = datetime.now().isoformat()
 
-                if notes:
-                    if "update_log" not in item:
-                        item["update_log"] = []
-                    item["update_log"].append({
-                        "timestamp": datetime.now().isoformat(),
-                        "from": old_status,
-                        "to": new_status,
-                        "notes": notes,
-                    })
+                    if notes:
+                        if "update_log" not in item:
+                            item["update_log"] = []
+                        item["update_log"].append({
+                            "timestamp": datetime.now().isoformat(),
+                            "from": old_status,
+                            "to": new_status,
+                            "notes": notes,
+                        })
 
-                _save_plan(output_dir)
-                _emit_plan_update()
-                _emit_flowchart_update()
+                    break
+            else:
+                return strands_result({"error": f"Item {item_id} not found in plan"}, status="error")
 
-                return markdown_result(
-                    f"Item `{item_id}` ({item['title']}): {old_status} -> {new_status}"
-                )
+        _save_plan(output_dir)
+        _emit_plan_update()
+        _emit_flowchart_update()
 
-        return strands_result({"error": f"Item {item_id} not found in plan"}, status="error")
+        return markdown_result(
+            f"Item `{item_id}` ({item['title']}): {old_status} -> {new_status}"
+        )
 
     # ── CHECK_DEPS: Dependency readiness check ───────────────────────────
     elif action == "check_deps":
