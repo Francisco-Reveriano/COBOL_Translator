@@ -33,8 +33,7 @@ interface PipelineFlowchartProps {
 // Pipeline phases
 // ---------------------------------------------------------------------------
 const PHASES = [
-  { id: 'upload',   label: 'Upload',   icon: '\u2191' },
-  { id: 'scan',     label: 'Scan',     icon: '\u2315' },
+  { id: 'analyze',  label: 'Analyze',  icon: '\u2315' },
   { id: 'plan',     label: 'Plan',     icon: '\u2630' },
   { id: 'convert',  label: 'Convert',  icon: '\u21C4' },
   { id: 'score',    label: 'Score',    icon: '\u2605' },
@@ -54,8 +53,7 @@ const TOOL_LABELS: Record<string, string> = {
 }
 
 const PHASE_LABELS: Record<string, string> = {
-  upload: 'Uploading',
-  scan: 'Scanning',
+  analyze: 'Analyzing',
   plan: 'Planning',
   convert: 'Converting',
   score: 'Scoring',

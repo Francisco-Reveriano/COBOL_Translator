@@ -206,10 +206,35 @@ function CicsNode({ data }: NodeProps<Node<CustomNodeData>>) {
   )
 }
 
+function ParagraphNode({ data }: NodeProps<Node<CustomNodeData>>) {
+  return (
+    <div
+      style={{
+        width: 120, height: 36,
+        border: '1px solid var(--border-color)',
+        borderRadius: 12,
+        background: 'var(--bg-primary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '4px 8px',
+        cursor: 'pointer',
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={{ visibility: 'hidden' }} />
+      <span style={{ color: 'var(--text-secondary)', fontSize: 10, fontWeight: 500 }}>
+        {data.label}
+      </span>
+      <Handle type="source" position={Position.Bottom} style={{ visibility: 'hidden' }} />
+    </div>
+  )
+}
+
 const nodeTypes: NodeTypes = {
   program: ProgramNode,
   copybook: CopybookNode,
   cics: CicsNode,
+  paragraph: ParagraphNode,
 }
 
 // ---------------------------------------------------------------------------
@@ -260,10 +285,25 @@ function CriticalEdge(props: EdgeProps) {
   )
 }
 
+function PerformEdge(props: EdgeProps) {
+  const [path] = getBezierPath({
+    sourceX: props.sourceX, sourceY: props.sourceY,
+    targetX: props.targetX, targetY: props.targetY,
+    sourcePosition: props.sourcePosition, targetPosition: props.targetPosition,
+  })
+  return (
+    <BaseEdge
+      path={path}
+      style={{ stroke: 'var(--text-muted)', strokeWidth: 1, strokeDasharray: '3 3' }}
+    />
+  )
+}
+
 const edgeTypes: EdgeTypes = {
   call: CallEdge,
   copy: CopyEdge,
   critical: CriticalEdge,
+  perform: PerformEdge,
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +319,12 @@ function layoutWithDagre(
 
   // Add nodes
   for (const n of flowNodes) {
-    const { width, height } = nodeDimensions(n.loc)
-    g.setNode(n.id, { width: width + 20, height: height + 20 })
+    if (n.type === 'paragraph') {
+      g.setNode(n.id, { width: 140, height: 56 })
+    } else {
+      const { width, height } = nodeDimensions(n.loc)
+      g.setNode(n.id, { width: width + 20, height: height + 20 })
+    }
   }
 
   // Add edges
@@ -296,7 +340,7 @@ function layoutWithDagre(
     const { width, height } = nodeDimensions(fn.loc)
     return {
       id: fn.id,
-      type: fn.type === 'cics' ? 'cics' : fn.type === 'copybook' ? 'copybook' : 'program',
+      type: fn.type === 'paragraph' ? 'paragraph' : fn.type === 'cics' ? 'cics' : fn.type === 'copybook' ? 'copybook' : 'program',
       position: { x: (pos?.x ?? 0) - width / 2, y: (pos?.y ?? 0) - height / 2 },
       data: {
         label: fn.label,
@@ -318,10 +362,11 @@ function layoutWithDagre(
     .map((fe) => {
       // Determine edge visual type
       let edgeType = 'call'
-      if (fe.type === 'COPY') edgeType = 'copy'
+      if (fe.type === 'PERFORM') edgeType = 'perform'
+      else if (fe.type === 'COPY') edgeType = 'copy'
       // Mark as critical if source or target is CICS / high-complexity
       const srcNode = flowNodes.find(n => n.id === fe.source)
-      if (srcNode?.has_cics || srcNode?.complexity === 'critical') edgeType = 'critical'
+      if (edgeType === 'call' && (srcNode?.has_cics || srcNode?.complexity === 'critical')) edgeType = 'critical'
 
       return {
         id: fe.id,
@@ -386,6 +431,35 @@ function NodeDetailPanel({ node, onClose }: { node: FlowNode; onClose: () => voi
         )}
         {node.has_cics && (
           <div style={{ color: 'var(--score-red)', fontSize: 11 }}>Contains CICS transactions</div>
+        )}
+        {node.data_items_count != null && node.data_items_count > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: 'var(--text-muted)' }}>Data Items</span>
+            <span style={{ color: 'var(--text-primary)' }}>{node.data_items_count}</span>
+          </div>
+        )}
+        {node.sections && node.sections.length > 0 && (
+          <div>
+            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>Sections</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
+              {node.sections.map(s => (
+                <span key={s} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>{s}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {node.paragraphs && node.paragraphs.length > 0 && (
+          <div>
+            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>Paragraphs ({node.paragraphs.length})</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, marginTop: 3 }}>
+              {node.paragraphs.slice(0, 12).map(p => (
+                <span key={p} style={{ fontSize: 10, padding: '1px 5px', borderRadius: 4, backgroundColor: 'var(--bg-primary)', color: 'var(--text-secondary)', border: '1px solid var(--border-color)' }}>{p}</span>
+              ))}
+              {node.paragraphs.length > 12 && (
+                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>+{node.paragraphs.length - 12} more</span>
+              )}
+            </div>
+          </div>
         )}
       </div>
     </div>

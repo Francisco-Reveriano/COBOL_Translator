@@ -40,6 +40,7 @@ from Backend.config import get_settings
 from Backend.event_bus import event_bus
 from Backend.session import Session, session
 from Backend.schemas import (
+    AnalyzeRequest,
     CompleteEvent,
     ConfigResponse,
     ConversionStatus,
@@ -180,6 +181,171 @@ async def upload_files(files: list[UploadFile] = File(...)):
 
 
 # ---------------------------------------------------------------------------
+# POST /api/v1/analyze — Scan COBOL files and return structure chart
+# ---------------------------------------------------------------------------
+SAMPLE_CODE_DIR = Path("Data/Sample_Code")
+
+
+@app.post("/api/v1/analyze")
+async def analyze_structure(request: AnalyzeRequest = AnalyzeRequest()):
+    """Scan COBOL files and return structure chart data without starting conversion."""
+    from Backend.Agents.Tools.cobol_scanner import (
+        parse_cobol_file, build_dependency_graph, COBOL_EXTENSIONS,
+    )
+
+    # Determine source directory
+    if request.source == "sample":
+        cobol_dir = str(SAMPLE_CODE_DIR.resolve())
+    else:
+        cobol_dir = request.cobol_dir or settings.INPUT_DIR
+
+    source_path = Path(cobol_dir)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail=f"Source directory not found: {cobol_dir}")
+
+    # Find and parse COBOL files
+    cobol_files = []
+    for ext in COBOL_EXTENSIONS:
+        cobol_files.extend(source_path.rglob(f"*{ext}"))
+
+    if not cobol_files:
+        raise HTTPException(status_code=400, detail="No COBOL files found in source directory")
+
+    scan_results = []
+    errors = []
+    for f in sorted(cobol_files):
+        try:
+            result = parse_cobol_file(str(f))
+            scan_results.append(result)
+        except Exception as e:
+            errors.append({"file": str(f), "error": str(e)})
+            logger.warning(f"Failed to parse {f}: {e}")
+
+    dep_graph = build_dependency_graph(scan_results)
+
+    # Build enriched FlowNodes (program-level)
+    nodes: list[dict] = []
+    edges: list[dict] = []
+
+    for prog in scan_results:
+        source_file = prog["file"]
+        is_copybook = source_file.lower().endswith((".cpy", ".copy"))
+        node_type = "cics" if prog["has_cics"] else ("copybook" if is_copybook else "program")
+
+        nodes.append(FlowNode(
+            id=prog["program_id"],
+            label=prog["program_id"],
+            type=node_type,
+            status="pending",
+            complexity=prog["complexity"],
+            loc=prog["lines_of_code"],
+            has_sql=prog["has_embedded_sql"],
+            has_cics=prog["has_cics"],
+            source_file=source_file,
+            paragraphs=prog.get("paragraphs", []),
+            sections=[s for s in prog.get("sections", [])],
+            performs=prog.get("performs", []),
+            data_items_count=prog.get("data_items_count", 0),
+        ).model_dump())
+
+    # Inter-program edges (CALL / COPY)
+    for i, edge in enumerate(dep_graph.get("edges", [])):
+        edges.append(FlowEdge(
+            id=f"e{i}",
+            source=edge["from"],
+            target=edge["to"],
+            type=edge["type"],
+        ).model_dump())
+
+    # Paragraph-level nodes and PERFORM edges
+    edge_counter = len(edges)
+    for prog in scan_results:
+        pid = prog["program_id"]
+        para_set = set(prog.get("paragraphs", []))
+        for para_name in para_set:
+            para_id = f"{pid}::{para_name}"
+            nodes.append(FlowNode(
+                id=para_id,
+                label=para_name,
+                type="paragraph",
+                status="pending",
+                complexity="low",
+                loc=0,
+                source_file=prog["file"],
+            ).model_dump())
+            # Program → paragraph containment edge
+            edges.append(FlowEdge(
+                id=f"e{edge_counter}",
+                source=pid,
+                target=para_id,
+                type="PERFORM",
+            ).model_dump())
+            edge_counter += 1
+
+        # PERFORM edges between paragraphs within the same program
+        for perf_target in prog.get("performs", []):
+            target_id = f"{pid}::{perf_target}"
+            if perf_target in para_set:
+                edges.append(FlowEdge(
+                    id=f"e{edge_counter}",
+                    source=pid,
+                    target=target_id,
+                    type="PERFORM",
+                ).model_dump())
+                edge_counter += 1
+
+    # Summary stats
+    summary = {
+        "total_files": len(scan_results),
+        "total_lines_of_code": sum(r["lines_of_code"] for r in scan_results),
+        "complexity_distribution": {},
+        "programs_with_sql": sum(1 for r in scan_results if r["has_embedded_sql"]),
+        "programs_with_cics": sum(1 for r in scan_results if r["has_cics"]),
+        "total_copy_dependencies": sum(len(r["copy_dependencies"]) for r in scan_results),
+        "total_call_dependencies": sum(len(r["call_dependencies"]) for r in scan_results),
+    }
+    for r in scan_results:
+        c = r["complexity"]
+        summary["complexity_distribution"][c] = summary["complexity_distribution"].get(c, 0) + 1
+
+    # Persist scan_results.json for later use by conversion agent
+    output_path = Path(settings.OUTPUT_DIR)
+    output_path.mkdir(parents=True, exist_ok=True)
+    scan_data = {
+        "programs": scan_results,
+        "dependency_graph": dep_graph,
+        "summary": summary,
+        "errors": errors,
+    }
+    scan_file = output_path / "scan_results.json"
+    scan_file.write_text(json.dumps(scan_data, indent=2, default=str))
+
+    # Remember cobol_dir for the convert step
+    session.cobol_dir = cobol_dir
+
+    logger.info(f"Structure analysis complete: {len(scan_results)} programs, {len(nodes)} nodes, {len(edges)} edges")
+
+    return {"nodes": nodes, "edges": edges, "summary": summary}
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/samples — List available sample COBOL files
+# ---------------------------------------------------------------------------
+@app.get("/api/v1/samples")
+async def list_samples():
+    """List available sample COBOL files from Data/Sample_Code/."""
+    if not SAMPLE_CODE_DIR.exists():
+        return {"files": [], "directory": str(SAMPLE_CODE_DIR)}
+
+    files = []
+    for f in sorted(SAMPLE_CODE_DIR.rglob("*")):
+        if f.is_file() and f.suffix.lower() in COBOL_EXTENSIONS:
+            files.append({"name": f.name, "path": str(f), "size": f.stat().st_size})
+
+    return {"files": files, "directory": str(SAMPLE_CODE_DIR)}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/v1/convert — Start conversion (FR-2.7)
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/convert", response_model=ConvertStartResponse)
@@ -188,7 +354,7 @@ async def start_conversion(request: ConvertRequest = ConvertRequest()):
     if session.status == SessionStatus.RUNNING:
         raise HTTPException(status_code=409, detail="Conversion already in progress")
 
-    cobol_dir = request.cobol_dir or settings.INPUT_DIR
+    cobol_dir = request.cobol_dir or session.cobol_dir or settings.INPUT_DIR
     output_dir = request.output_dir or settings.OUTPUT_DIR
 
     # Validate source directory has COBOL files
@@ -202,7 +368,7 @@ async def start_conversion(request: ConvertRequest = ConvertRequest()):
 
     # Spawn agent as asyncio task (in-process, FR-2.7)
     session.agent_task = asyncio.create_task(
-        _run_agent(cobol_dir, output_dir)
+        _run_agent(cobol_dir, output_dir, skip_scan=request.skip_scan)
     )
 
     return ConvertStartResponse(
@@ -211,7 +377,7 @@ async def start_conversion(request: ConvertRequest = ConvertRequest()):
     )
 
 
-async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> None:
+async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False, skip_scan: bool = False) -> None:
     """Run the Strands agent in a background asyncio task."""
     # Import here to avoid circular imports at module level
     from Backend.Agents.agent import run_conversion
@@ -263,6 +429,7 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> N
                 cobol_dir, output_dir,
                 event_callback=emit,
                 steering_checker=check_steering,
+                skip_scan=skip_scan,
             ),
         )
 
@@ -301,6 +468,7 @@ async def _run_agent(cobol_dir: str, output_dir: str, resume: bool = False) -> N
                         cobol_dir, output_dir,
                         event_callback=emit,
                         steering_checker=check_steering,
+                        skip_scan=skip_scan,
                     ),
                 )
 

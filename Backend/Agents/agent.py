@@ -172,7 +172,7 @@ class SSEStreamHandler:
     def _update_phase(self, tool_name: str) -> None:
         """Infer the current phase from the tool being called."""
         phase_map = {
-            "cobol_scanner": "scan",
+            "cobol_scanner": "analyze",
             "conversion_planner": "plan",
             "cobol_converter": "convert",
             "cobol_refiner": "convert",
@@ -258,11 +258,44 @@ Begin now by scanning the COBOL source directory.
 """
 
 
+def build_conversion_prompt_skip_scan(cobol_dir: str, output_dir: str = "./output") -> str:
+    """Build prompt that skips scanning (scan_results.json already exists from /analyze)."""
+    return f"""
+You are continuing a COBOL-to-Python migration. The COBOL source files have already been
+scanned and the results are saved at `{output_dir}/scan_results.json`.
+
+DO NOT call cobol_scanner — the scan is already complete.
+
+Follow these steps exactly:
+
+1. Use `conversion_planner(output_dir="{output_dir}")` to create a structured conversion plan
+   (it will read scan_results.json automatically)
+2. For each item in the plan:
+   a. Use `plan_tracker(action="next", output_dir="{output_dir}")` to get the next item
+   b. Use `plan_tracker(action="update_status", ..., new_status="in_progress", output_dir="{output_dir}")`
+   c. Use `cobol_converter(source_file=..., target_file=..., program_id=..., item_id=..., output_dir="{output_dir}")` to load source and conversion context
+   d. Generate the full Python module based on the COBOL source and conversion notes
+   e. Use `quality_scorer(module_name=..., cobol_source=..., python_output=<your Python code>, output_dir="{output_dir}", target_file=<target_file>)` to write the code to disk and score it
+   f. REFINEMENT LOOP — target score >= 95.0, max 3 attempts:
+      If the overall score is below 95.0 and you have fewer than 3 refinement attempts:
+        i.   Use `cobol_refiner(source_file=..., target_file=..., program_id=..., attempt=<1,2,3>, output_dir="{output_dir}")` — it reads the score from disk
+        ii.  Generate an improved Python module addressing every issue
+        iii. Use `quality_scorer(module_name=..., cobol_source=..., python_output=<improved code>, output_dir="{output_dir}", target_file=<target_file>)` to write improved code to disk and re-score
+        iv.  Repeat until score >= 95.0 or 3 attempts exhausted
+   g. Mark the item "completed" with `plan_tracker(action="update_status", ..., new_status="completed", output_dir="{output_dir}")`
+3. After all conversions, use `validation_checker(output_dir="{output_dir}")` to verify the output
+4. Provide a final migration summary report including all quality scores
+
+Begin now by creating the conversion plan.
+"""
+
+
 def run_conversion(
     cobol_dir: str,
     output_dir: str = "./output",
     event_callback: Optional[EventCallback] = None,
     steering_checker: Optional[Callable[[], dict]] = None,
+    skip_scan: bool = False,
 ) -> dict:
     """
     Master loop: scan → plan → convert → validate → report.
@@ -274,6 +307,7 @@ def run_conversion(
         steering_checker: Optional callable returning steering state dict with
                           keys: pause_requested, skip_requested, retry_item_id.
                           Called between agent invocations for steering control.
+        skip_scan: If True, skip scanning (scan_results.json already exists).
 
     Returns:
         The agent's final response as a string.
@@ -291,7 +325,11 @@ def run_conversion(
         set_planner_cb(event_callback)
 
     agent = create_agent(event_callback=event_callback, output_dir=output_dir)
-    prompt = build_conversion_prompt(cobol_dir, output_dir)
+
+    if skip_scan:
+        prompt = build_conversion_prompt_skip_scan(cobol_dir, output_dir)
+    else:
+        prompt = build_conversion_prompt(cobol_dir, output_dir)
 
     logger.info("Starting COBOL-to-Python conversion agent...")
     logger.info(f"   Source: {cobol_dir}")

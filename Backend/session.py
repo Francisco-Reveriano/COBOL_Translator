@@ -35,6 +35,9 @@ class Session:
     current_item_id: str = ""
     progress_pct: float = 0.0
 
+    # COBOL source directory (set during analysis)
+    cobol_dir: str = ""
+
     # Steering flags (FR-7)
     pause_requested: bool = False
     skip_requested: bool = False

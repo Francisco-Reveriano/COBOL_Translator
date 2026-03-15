@@ -1,6 +1,18 @@
 /** SSE event types matching PRD Section 5.5.1 and Backend schemas */
 
 export type SessionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed'
+export type AppMode = 'choose' | 'upload' | 'analyzing' | 'chart' | 'translating'
+export type FileSource = 'upload' | 'sample'
+
+export interface ScanSummary {
+  total_files: number
+  total_lines_of_code: number
+  complexity_distribution: Record<string, number>
+  programs_with_sql: number
+  programs_with_cics: number
+  total_copy_dependencies: number
+  total_call_dependencies: number
+}
 export type ScoreThreshold = 'green' | 'yellow' | 'red'
 export type IssueSeverity = 'critical' | 'warning' | 'info'
 export type SteeringAction = 'PAUSE' | 'RESUME' | 'SKIP' | 'RETRY'
@@ -78,6 +90,11 @@ export interface FlowNode {
   has_sql?: boolean
   has_cics?: boolean
   source_file?: string
+  // Structure chart detail
+  paragraphs?: string[]
+  sections?: string[]
+  performs?: string[]
+  data_items_count?: number
 }
 
 export interface FlowEdge {

@@ -2,7 +2,7 @@ import { Check, Circle, Loader2, XCircle } from 'lucide-react'
 import type { SessionStatus } from '../types/events'
 
 const PHASES = [
-  { key: 'scan', label: 'Scan' },
+  { key: 'analyze', label: 'Analyze' },
   { key: 'plan', label: 'Plan' },
   { key: 'convert', label: 'Convert' },
   { key: 'score', label: 'Score' },

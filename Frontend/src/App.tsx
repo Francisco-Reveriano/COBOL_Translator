@@ -17,8 +17,10 @@ import { DiffView } from './components/DiffView'
 import { DependencyGraph } from './components/DependencyGraph'
 import { PipelineFlowchart } from './components/PipelineFlowchart'
 import { ResumePrompt } from './components/ResumePrompt'
+import { ModeSelector } from './components/ModeSelector'
+import { StructureChart } from './components/StructureChart'
 
-import type { SessionStatus, SteeringAction, SteeringResponse } from './types/events'
+import type { AppMode, FileSource, FlowNode, FlowEdge, ScanSummary, SessionStatus, SteeringAction, SteeringResponse } from './types/events'
 
 type CenterTab = 'stream' | 'graph'
 type RightTab = 'code' | 'diff'
@@ -31,6 +33,10 @@ export default function App() {
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>('idle')
   const [errorMessage, setErrorMessage] = useState('')
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([])
+  const [appMode, setAppMode] = useState<AppMode>('choose')
+  const [fileSource, setFileSource] = useState<FileSource | null>(null)
+  const [structureChart, setStructureChart] = useState<{ nodes: FlowNode[]; edges: FlowEdge[] } | null>(null)
+  const [scanSummary, setScanSummary] = useState<ScanSummary | null>(null)
   const [centerTab, setCenterTab] = useState<CenterTab>('stream')
   const [rightTab, setRightTab] = useState<RightTab>('code')
   const [fileRefreshTick, setFileRefreshTick] = useState(0)
@@ -154,16 +160,69 @@ export default function App() {
     [sendSteering],
   )
 
-  // Start conversion
-  const startConversion = useCallback(async () => {
+  // Analyze structure (shared by both upload and sample paths)
+  const runAnalysis = useCallback(async (source: 'upload' | 'sample') => {
+    setAppMode('analyzing')
+    try {
+      const resp = await fetch('/api/v1/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      })
+      if (!resp.ok) {
+        const err = await resp.json()
+        setErrorMessage(err.detail || 'Analysis failed')
+        setAppMode(source === 'upload' ? 'upload' : 'choose')
+        return
+      }
+      const data = await resp.json()
+      setStructureChart({ nodes: data.nodes, edges: data.edges })
+      setScanSummary(data.summary)
+      setAppMode('chart')
+    } catch (e) {
+      setErrorMessage(e instanceof Error ? e.message : 'Network error')
+      setAppMode(source === 'upload' ? 'upload' : 'choose')
+    }
+  }, [])
+
+  const handleSelectUpload = useCallback(() => {
+    setFileSource('upload')
+    setAppMode('upload')
+  }, [])
+
+  const handleSelectSample = useCallback(() => {
+    setFileSource('sample')
+    runAnalysis('sample')
+  }, [runAnalysis])
+
+  const handleAnalyze = useCallback(() => {
+    runAnalysis('upload')
+  }, [runAnalysis])
+
+  // Start translation from structure chart
+  const handleStartTranslation = useCallback(async () => {
+    setAppMode('translating')
     reset()
     setRunning(true)
     setSessionStatus('running')
+    // Pre-populate flow graph from structure chart (program-level only)
+    if (structureChart) {
+      const programNodes = structureChart.nodes.filter(n => n.type !== 'paragraph')
+      const programEdges = structureChart.edges.filter(e => e.type !== 'PERFORM')
+      handleSSEEvent('flowchart' as import('./types/events').SSEEventType, { nodes: programNodes, edges: programEdges })
+    }
     try {
+      const body: Record<string, unknown> = {
+        output_dir: './output',
+        skip_scan: true,
+      }
+      if (fileSource === 'sample') {
+        body.cobol_dir = 'Data/Sample_Code'
+      }
       const resp = await fetch('/api/v1/convert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ output_dir: './output' }),
+        body: JSON.stringify(body),
       })
       if (!resp.ok) {
         const err = await resp.json()
@@ -178,7 +237,7 @@ export default function App() {
       setErrorMessage(e instanceof Error ? e.message : 'Network error')
       setRunning(false)
     }
-  }, [reset, setRunning])
+  }, [reset, setRunning, structureChart, fileSource, handleSSEEvent])
 
   const clearAll = useCallback(() => {
     fetch('/api/v1/convert/resume', { method: 'DELETE' }).catch(() => {})
@@ -187,6 +246,10 @@ export default function App() {
     setSessionStatus('idle')
     setErrorMessage('')
     setUploadedFiles([])
+    setAppMode('choose')
+    setFileSource(null)
+    setStructureChart(null)
+    setScanSummary(null)
     setLayoutFocus('balanced')
     setRightPaneWidth(presetWidth('balanced'))
     manualFocusRef.current = false
@@ -290,35 +353,66 @@ export default function App() {
           ) : null}
 
           {/* Content */}
-          {isIdle && state.activities.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center p-8">
-              <div className="w-full max-w-lg flex flex-col gap-6 items-center">
-                {/* Resume prompt — shown when a previous conversion was interrupted (FR-8.5) */}
+          {appMode === 'choose' && isIdle && state.activities.length === 0 ? (
+            <>
+              {/* Resume prompt — shown when a previous conversion was interrupted (FR-8.5) */}
+              <div className="flex-shrink-0">
                 <ResumePrompt
                   onResume={() => {
+                    setAppMode('translating')
                     setRunning(true)
                     setSessionStatus('running')
                   }}
                   onDiscard={() => {
-                    /* User wants fresh start — just stay on upload screen */
+                    /* User wants fresh start — stay on mode selector */
                   }}
                 />
-
+              </div>
+              <ModeSelector onSelectUpload={handleSelectUpload} onSelectSample={handleSelectSample} />
+            </>
+          ) : appMode === 'upload' && isIdle && state.activities.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center p-8">
+              <div className="w-full max-w-lg flex flex-col gap-6 items-center">
                 <FileUpload
                   onUploaded={setUploadedFiles}
-                  disabled={!isIdle}
+                  disabled={false}
                 />
                 {uploadedFiles.length > 0 && (
                   <button
-                    onClick={startConversion}
+                    onClick={handleAnalyze}
                     className="px-6 py-3 rounded-lg font-semibold text-sm text-white transition-colors hover:opacity-90"
-                    style={{ backgroundColor: 'var(--accent-alt)' }}
+                    style={{ backgroundColor: 'var(--accent-alt, var(--accent-primary))' }}
                   >
-                    Start Conversion
+                    Analyze Structure
                   </button>
                 )}
+                <button
+                  onClick={() => setAppMode('choose')}
+                  className="text-xs font-medium px-3 py-1 rounded transition-colors"
+                  style={{ backgroundColor: 'transparent', color: 'var(--text-muted)', border: '1px solid var(--border-color)', cursor: 'pointer' }}
+                >
+                  Back
+                </button>
               </div>
             </div>
+          ) : appMode === 'analyzing' ? (
+            <div className="flex-1 flex flex-col items-center justify-center gap-3">
+              <div
+                className="animate-spin rounded-full"
+                style={{ width: 40, height: 40, border: '3px solid var(--border-color)', borderTopColor: 'var(--accent-primary)' }}
+              />
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Analyzing COBOL structure...
+              </span>
+            </div>
+          ) : appMode === 'chart' && structureChart ? (
+            <StructureChart
+              flowNodes={structureChart.nodes}
+              flowEdges={structureChart.edges}
+              scanSummary={scanSummary}
+              onStartTranslation={handleStartTranslation}
+              onBack={() => setAppMode(fileSource === 'upload' ? 'upload' : 'choose')}
+            />
           ) : centerTab === 'stream' ? (
             <StreamingPanel activities={state.activities} isRunning={state.isRunning} />
           ) : (
