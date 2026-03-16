@@ -27,7 +27,7 @@ export function SteeringBar({ status, onCommand, onClear }: SteeringBarProps) {
               icon={<Play size={14} />}
               label="Resume"
               onClick={() => onCommand('RESUME')}
-              accent
+              variant="accent"
             />
           )}
 
@@ -50,6 +50,7 @@ export function SteeringBar({ status, onCommand, onClear }: SteeringBarProps) {
           icon={<Trash2 size={14} />}
           label="Clear"
           onClick={onClear}
+          variant="danger"
         />
       )}
     </div>
@@ -60,22 +61,17 @@ function SteerButton({
   icon,
   label,
   onClick,
-  accent,
+  variant,
 }: {
   icon: React.ReactNode
   label: string
   onClick: () => void
-  accent?: boolean
+  variant?: 'accent' | 'danger'
 }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors hover:opacity-80"
-      style={{
-        borderColor: accent ? 'var(--accent)' : 'var(--border-color)',
-        color: accent ? 'var(--accent)' : 'var(--text-primary)',
-        backgroundColor: 'var(--bg-card)',
-      }}
+      className={`steer-btn ${variant === 'accent' ? 'steer-btn--accent' : variant === 'danger' ? 'steer-btn--danger' : ''}`}
     >
       {icon}
       {label}

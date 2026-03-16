@@ -40,7 +40,6 @@ export function StructureChart({
     return { visibleNodes: nodes, visibleEdges: edges }
   }, [flowNodes, flowEdges, showParagraphs])
 
-  const programCount = flowNodes.filter(n => n.type !== 'paragraph').length
   const paragraphCount = flowNodes.filter(n => n.type === 'paragraph').length
 
   return (

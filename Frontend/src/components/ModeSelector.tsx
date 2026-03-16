@@ -4,7 +4,7 @@
  * Option 2: Use pre-loaded sample code from Data/Sample_Code
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Upload, FileCode } from 'lucide-react'
 
 interface SampleFile {

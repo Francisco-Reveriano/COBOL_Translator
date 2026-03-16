@@ -176,6 +176,24 @@ export interface SteeringResponse {
   reason?: string
 }
 
+export interface FileEntry {
+  path: string
+  name: string
+  relative: string
+}
+
+export interface FileList {
+  cobol: FileEntry[]
+  python: FileEntry[]
+}
+
+export interface FileContent {
+  path: string
+  name: string
+  content: string
+  language: string
+}
+
 export type SSEEventType =
   | 'reasoning'
   | 'tool_call'

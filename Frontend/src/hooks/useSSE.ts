@@ -55,8 +55,8 @@ export function useSSE({ url, onEvent, enabled = true }: UseSSEOptions) {
         try {
           const data = JSON.parse(e.data)
           onEventRef.current(type, data)
-        } catch {
-          // skip malformed events
+        } catch (err) {
+          console.warn('[useSSE] Malformed event data:', e.data, err)
         }
       })
     }

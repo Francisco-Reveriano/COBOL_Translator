@@ -28,9 +28,7 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Optional
-
-from typing import Callable
+from typing import Any, Callable, Optional
 from strands import tool
 from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
 
@@ -200,7 +198,14 @@ def _score_with_codex(
     """
     import openai
 
-    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable is not set. "
+            "The quality scorer requires an OpenAI API key for GPT-based scoring. "
+            "Set it in your .env file or environment."
+        )
+    client = openai.OpenAI(api_key=api_key)
 
     user_prompt = f"""## Module: {module_name}
 

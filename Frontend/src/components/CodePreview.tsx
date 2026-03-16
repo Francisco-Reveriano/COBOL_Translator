@@ -19,7 +19,7 @@ import {
   ClipboardList, Star, ShieldCheck, FileBarChart,
 } from 'lucide-react'
 
-import type { SessionStatus } from '../types/events'
+import type { FileContent, FileEntry, FileList, SessionStatus } from '../types/events'
 
 interface CodePreviewProps {
   theme: 'light' | 'dark'
@@ -27,28 +27,9 @@ interface CodePreviewProps {
   selectedFile?: string
   phase?: string
   isRunning?: boolean
-  currentTool?: string
   currentItemId?: string
   fileRefreshTick?: number
   sessionStatus?: SessionStatus
-}
-
-interface FileEntry {
-  path: string
-  name: string
-  relative: string
-}
-
-interface FileList {
-  cobol: FileEntry[]
-  python: FileEntry[]
-}
-
-interface FileContent {
-  path: string
-  name: string
-  content: string
-  language: string
 }
 
 // Phase metadata for the dynamic empty state
@@ -155,7 +136,6 @@ export function CodePreview({
   selectedFile,
   phase,
   isRunning,
-  currentTool: _currentTool,
   currentItemId,
   fileRefreshTick,
   sessionStatus,

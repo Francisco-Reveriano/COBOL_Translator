@@ -16,24 +16,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeftRight, FileCode } from 'lucide-react'
 
-import type { SessionStatus } from '../types/events'
+import type { FileList, SessionStatus } from '../types/events'
 
 interface DiffViewProps {
   theme: 'light' | 'dark'
   fileRefreshTick?: number
   isRunning?: boolean
   sessionStatus?: SessionStatus
-}
-
-interface FileEntry {
-  path: string
-  name: string
-  relative: string
-}
-
-interface FileList {
-  cobol: FileEntry[]
-  python: FileEntry[]
 }
 
 export function DiffView({ theme, fileRefreshTick, isRunning, sessionStatus }: DiffViewProps) {

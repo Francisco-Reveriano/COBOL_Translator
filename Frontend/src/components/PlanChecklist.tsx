@@ -7,7 +7,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { BookOpen, Check, ChevronRight, Circle, Loader2, SkipForward, XCircle } from 'lucide-react'
-import type { ConversionGuidelines, ConversionNotes, PhaseSummary, PlanItem } from '../types/events'
+import type { ConversionGuidelines, PhaseSummary, PlanItem } from '../types/events'
 
 interface PlanChecklistProps {
   items: PlanItem[]

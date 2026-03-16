@@ -18,6 +18,7 @@ import { DependencyGraph } from './components/DependencyGraph'
 import { PipelineFlowchart } from './components/PipelineFlowchart'
 import { ResumePrompt } from './components/ResumePrompt'
 import { ModeSelector } from './components/ModeSelector'
+import { AlertTriangle } from 'lucide-react'
 import { StructureChart } from './components/StructureChart'
 
 import type { AppMode, FileSource, FlowNode, FlowEdge, ScanSummary, SessionStatus, SteeringAction, SteeringResponse } from './types/events'
@@ -226,13 +227,11 @@ export default function App() {
       })
       if (!resp.ok) {
         const err = await resp.json()
-        console.error('Failed to start:', err)
         setSessionStatus('failed')
         setErrorMessage(err.detail || 'Failed to start conversion')
         setRunning(false)
       }
     } catch (e) {
-      console.error('Failed to start:', e)
       setSessionStatus('failed')
       setErrorMessage(e instanceof Error ? e.message : 'Network error')
       setRunning(false)
@@ -240,8 +239,8 @@ export default function App() {
   }, [reset, setRunning, structureChart, fileSource, handleSSEEvent])
 
   const clearAll = useCallback(() => {
-    fetch('/api/v1/convert/resume', { method: 'DELETE' }).catch(() => {})
-    fetch('/api/v1/files', { method: 'DELETE' }).catch(() => {})
+    fetch('/api/v1/convert/resume', { method: 'DELETE' }).catch((err) => console.warn('Cleanup failed:', err))
+    fetch('/api/v1/files', { method: 'DELETE' }).catch((err) => console.warn('Cleanup failed:', err))
     reset()
     setSessionStatus('idle')
     setErrorMessage('')
@@ -284,16 +283,26 @@ export default function App() {
         {/* Error banner */}
         {sessionStatus === 'failed' && (
           <div
-            className="flex items-center gap-3 px-4 py-2 border-b"
-            style={{ backgroundColor: 'var(--score-red)', color: '#fff', borderColor: 'var(--score-red)' }}
+            className="flex items-center gap-3 px-4 py-2.5 border-b anim-slide-in-top"
+            style={{
+              background: 'linear-gradient(135deg, var(--score-red), #B91C1C)',
+              color: '#fff',
+              borderColor: 'var(--score-red)',
+            }}
           >
+            <AlertTriangle size={16} style={{ flexShrink: 0, opacity: 0.9 }} />
             <span className="text-xs font-semibold flex-1">
               Conversion failed{errorMessage ? `: ${errorMessage}` : ''}
             </span>
             <button
               onClick={() => { setSessionStatus('idle'); setErrorMessage('') }}
-              className="text-xs font-medium px-2 py-0.5 rounded"
-              style={{ backgroundColor: 'rgba(255,255,255,0.2)', color: '#fff', border: 'none', cursor: 'pointer' }}
+              className="text-xs font-medium px-2.5 py-0.5 rounded"
+              style={{
+                backgroundColor: 'rgba(255,255,255,0.15)',
+                color: '#fff',
+                border: '1px solid rgba(255,255,255,0.3)',
+                cursor: 'pointer',
+              }}
             >
               Dismiss
             </button>
@@ -468,7 +477,6 @@ export default function App() {
               theme={theme}
               phase={state.phase}
               isRunning={state.isRunning}
-              currentTool={state.currentTool}
               currentItemId={state.currentItemId}
               fileRefreshTick={fileRefreshTick}
               sessionStatus={sessionStatus}
@@ -506,19 +514,13 @@ function TabButton({
   disabled?: boolean
   children: React.ReactNode
 }) {
+  const className = `tab-btn ${
+    disabled ? 'tab-btn--disabled' :
+    active ? 'tab-btn--active' :
+    'tab-btn--inactive'
+  }`
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="px-3 py-1 text-xs font-medium rounded-md transition-colors"
-      style={{
-        backgroundColor: active ? 'var(--accent-primary)' : 'transparent',
-        color: active ? '#fff' : disabled ? 'var(--text-muted)' : 'var(--text-secondary)',
-        cursor: disabled ? 'not-allowed' : 'pointer',
-        opacity: disabled ? 0.5 : 1,
-        border: 'none',
-      }}
-    >
+    <button onClick={onClick} disabled={disabled} className={className}>
       {children}
     </button>
   )
@@ -539,13 +541,7 @@ function FocusButton({
     <button
       onClick={onClick}
       title={title}
-      className="px-2 py-0.5 text-[9px] font-semibold rounded transition-colors"
-      style={{
-        backgroundColor: active ? 'var(--accent-primary)' : 'var(--bg-primary)',
-        color: active ? '#fff' : 'var(--text-muted)',
-        border: `1px solid ${active ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-        cursor: 'pointer',
-      }}
+      className={`focus-btn ${active ? 'focus-btn--active' : 'focus-btn--inactive'}`}
     >
       {children}
     </button>

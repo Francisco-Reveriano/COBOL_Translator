@@ -103,7 +103,10 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
           >
             {/* Compact summary row (always visible) */}
             <div
-              className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:opacity-80"
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer"
+              style={{ transition: 'background-color 150ms ease' }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'color-mix(in srgb, var(--text-secondary) 5%, transparent)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
               onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
               role="button"
               aria-expanded={expandedIdx === i}
@@ -112,7 +115,7 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
               <span className="text-xs flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
                 {s.module}
               </span>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1">
                 <DimBadge label="C" value={s.scores.correctness} />
                 <DimBadge label="Co" value={s.scores.completeness} />
                 <DimBadge label="M" value={s.scores.maintainability} />
@@ -237,8 +240,8 @@ function ThresholdDot({ threshold, animate }: { threshold: string; animate?: boo
     'var(--score-red)'
   return (
     <div
-      className={`w-2.5 h-2.5 rounded-full ${animate ? 'score-ring-animate' : ''}`}
-      style={{ backgroundColor: color, color }}
+      className={`w-3 h-3 rounded-full flex-shrink-0 ${animate ? 'score-ring-animate' : ''}`}
+      style={{ backgroundColor: color, color, boxShadow: `0 0 4px ${color === 'var(--score-green)' ? 'var(--score-green)' : color === 'var(--score-yellow)' ? 'var(--score-yellow)' : 'var(--score-red)'}` }}
     />
   )
 }
@@ -247,8 +250,15 @@ function DimBadge({ label, value }: { label: string; value: number }) {
   const color =
     value >= 85 ? 'var(--score-green)' : value >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
   return (
-    <span className="text-[9px] font-mono" style={{ color }}>
-      {label}:{value}
+    <span
+      className="text-[10px] font-mono px-1.5 py-px rounded-full"
+      style={{
+        color,
+        backgroundColor: `color-mix(in srgb, ${color} 10%, var(--bg-card))`,
+        border: `1px solid color-mix(in srgb, ${color} 25%, transparent)`,
+      }}
+    >
+      {label} {value}
     </span>
   )
 }
