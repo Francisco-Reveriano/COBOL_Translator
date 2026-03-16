@@ -8,6 +8,23 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BACKEND_LOG="$ROOT_DIR/.backend.log"
 FRONTEND_LOG="$ROOT_DIR/.frontend.log"
 
+# ── Kill previous session on same ports ─────────────────────────────
+echo "Killing any previous session on ports 8000 and 5173..."
+lsof -ti :8000 | xargs kill -9 2>/dev/null || true
+lsof -ti :5173 | xargs kill -9 2>/dev/null || true
+sleep 1
+
+# ── Clear previous conversion state (always start fresh) ────────────
+echo "Clearing previous conversion state..."
+rm -f "$ROOT_DIR/.cobol2py/state.json"
+rm -f "$ROOT_DIR/output/conversion_plan.json"
+rm -f "$ROOT_DIR/output/scan_results.json"
+rm -f "$ROOT_DIR/output/structure_chart.json"
+rm -rf "$ROOT_DIR/output/logs"
+rm -rf "$ROOT_DIR/output/scores"
+rm -rf "$ROOT_DIR/output/scores_cache"
+rm -rf "$ROOT_DIR/output/programs"
+
 cleanup() {
   echo ""
   echo "Shutting down..."
