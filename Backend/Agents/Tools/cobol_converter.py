@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result, ConversionContext
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +184,12 @@ def cobol_converter(
 
     cobol_source = source_path.read_text(encoding="utf-8", errors="replace")
 
-    # Load conversion notes from the plan file
+    # Load conversion notes from in-memory context (falls back to disk)
     conversion_notes = {}
-    plan_file = Path(output_dir) / "conversion_plan.json"
-    if plan_file.exists():
-        plan = json.loads(plan_file.read_text())
+    ctx = ConversionContext.instance()
+    plan_file = str(Path(output_dir) / "conversion_plan.json")
+    plan = ctx.get("conversion_plan", fallback_path=plan_file)
+    if plan:
         for item in plan.get("items", []):
             if item["id"] == item_id:
                 conversion_notes = item.get("conversion_notes", {})
@@ -242,7 +243,16 @@ def cobol_converter(
 """
     target_path.write_text(placeholder)
 
-    # Build markdown for the LLM
+    # Build markdown for the LLM (truncate COBOL to reduce context bloat)
+    MAX_COBOL_PREVIEW_LINES = 150
+    cobol_lines = cobol_source.split("\n")
+    if len(cobol_lines) > MAX_COBOL_PREVIEW_LINES:
+        truncated_source = "\n".join(cobol_lines[:MAX_COBOL_PREVIEW_LINES])
+        truncation_note = f"\n... ({len(cobol_lines) - MAX_COBOL_PREVIEW_LINES} more lines — full source at `{source_file}`)"
+    else:
+        truncated_source = cobol_source
+        truncation_note = ""
+
     md_lines = [
         f"## Convert: {program_id}",
         f"- **Source:** `{source_file}` ({len(clean_lines)} LOC)",
@@ -251,7 +261,7 @@ def cobol_converter(
         "",
         "### COBOL Source",
         "```cobol",
-        cobol_source,
+        truncated_source + truncation_note,
         "```",
         "",
     ]

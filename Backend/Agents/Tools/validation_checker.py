@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 from typing import Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result, ConversionContext
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +284,12 @@ def validation_checker(
     if not python_files:
         return strands_result({"overall_status": "error", "message": "No Python files found to validate"}, status="error")
 
-    # Load scan data from file (if exists)
+    # Load scan data from in-memory context (falls back to disk)
     program_lookup: dict[str, dict] = {}
-    scan_file = Path(output_dir) / "scan_results.json"
-    if scan_file.exists():
-        scan_data = json.loads(scan_file.read_text())
+    ctx = ConversionContext.instance()
+    scan_file = str(Path(output_dir) / "scan_results.json")
+    scan_data = ctx.get("scan_results", fallback_path=scan_file)
+    if scan_data:
         for prog in scan_data.get("programs", []):
             program_lookup[prog["program_id"]] = prog
 

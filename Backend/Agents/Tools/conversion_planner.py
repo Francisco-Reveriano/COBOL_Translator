@@ -16,22 +16,31 @@ ensuring COPY books and shared modules are converted first.
 import json
 import hashlib
 import logging
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Optional
 from strands import tool
-from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result
+from Backend.Agents.Tools.tool_helpers import strands_result, markdown_result, ConversionContext
 
 logger = logging.getLogger(__name__)
 
 # Module-level SSE event callback (set by agent factory)
 _event_callback: Optional[Callable[[str, dict[str, Any]], None]] = None
+_callback_lock = threading.Lock()
 
 
 def set_event_callback(cb: Optional[Callable[[str, dict[str, Any]], None]]) -> None:
     """Wire the SSE event callback from the agent factory."""
     global _event_callback
-    _event_callback = cb
+    with _callback_lock:
+        _event_callback = cb
+
+
+def _get_event_callback() -> Optional[Callable[[str, dict[str, Any]], None]]:
+    """Thread-safe read of the event callback."""
+    with _callback_lock:
+        return _event_callback
 
 
 # ---------------------------------------------------------------------------
@@ -199,14 +208,15 @@ def conversion_planner(output_dir: str = "./output") -> dict:
     Returns:
         Markdown summary of the plan with a reference to the saved JSON file.
     """
-    # Load scan data from file (written by cobol_scanner)
-    scan_file = Path(output_dir) / "scan_results.json"
-    if not scan_file.exists():
+    # Load scan data from memory cache (falls back to disk)
+    ctx = ConversionContext.instance()
+    scan_file = str(Path(output_dir) / "scan_results.json")
+    scan_results = ctx.get("scan_results", fallback_path=scan_file)
+    if not scan_results:
         return strands_result(
             {"error": f"scan_results.json not found in {output_dir}. Run cobol_scanner first."},
             status="error",
         )
-    scan_results = json.loads(scan_file.read_text())
 
     programs = scan_results.get("programs", [])
     dep_graph = scan_results.get("dependency_graph", {"nodes": [], "edges": []})
@@ -375,13 +385,13 @@ def conversion_planner(output_dir: str = "./output") -> dict:
     }
 
     plan_path = Path(output_dir) / "conversion_plan.json"
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(json.dumps(plan, indent=2, default=str))
+    ctx.set("conversion_plan", plan, persist_path=str(plan_path))
 
     # Emit initial flowchart and plan_update SSE events
-    if _event_callback:
+    cb = _get_event_callback()
+    if cb:
         try:
-            _event_callback("flowchart", {
+            cb("flowchart", {
                 "nodes": [
                     {
                         "id": n["id"],
@@ -406,7 +416,7 @@ def conversion_planner(output_dir: str = "./output") -> dict:
                     for i, e in enumerate(dep_graph.get("edges", []))
                 ],
             })
-            _event_callback("plan_update", {
+            cb("plan_update", {
                 "plan_id": plan_id,
                 "items": [
                     {
@@ -416,10 +426,16 @@ def conversion_planner(output_dir: str = "./output") -> dict:
                         "phase": item["phase"],
                         "program_id": item["program_id"],
                         "complexity": item.get("complexity", ""),
+                        "priority": item.get("priority", "P2"),
+                        "estimated_loc": item.get("estimated_loc", 0),
+                        "depends_on": item.get("depends_on", []),
+                        "conversion_notes": item.get("conversion_notes", {}),
                     }
                     for item in plan_items
                 ],
                 "progress_pct": 0.0,
+                "phases": phase_summary,
+                "conversion_guidelines": guidelines,
             })
         except Exception as e:
             logger.warning(f"Failed to emit planner events: {e}")

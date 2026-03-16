@@ -37,10 +37,10 @@ export function ProgressBar({ progressPct, phase, tokenUsage }: ProgressBarProps
         style={{ backgroundColor: 'var(--bg-secondary)' }}
       >
         <div
-          className="h-full rounded-full transition-all duration-500"
+          className={`h-full rounded-full transition-all duration-500${progressPct > 0 && progressPct < 100 ? ' progress-bar-sweep' : ''}`}
           style={{
             width: `${Math.min(progressPct, 100)}%`,
-            backgroundColor: 'var(--accent)',
+            backgroundColor: progressPct >= 100 ? 'var(--score-green)' : 'var(--accent)',
           }}
         />
       </div>

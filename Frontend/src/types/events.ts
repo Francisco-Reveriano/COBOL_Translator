@@ -1,6 +1,18 @@
 /** SSE event types matching PRD Section 5.5.1 and Backend schemas */
 
 export type SessionStatus = 'idle' | 'running' | 'paused' | 'completed' | 'failed'
+export type AppMode = 'choose' | 'upload' | 'analyzing' | 'chart' | 'translating'
+export type FileSource = 'upload' | 'sample'
+
+export interface ScanSummary {
+  total_files: number
+  total_lines_of_code: number
+  complexity_distribution: Record<string, number>
+  programs_with_sql: number
+  programs_with_cics: number
+  total_copy_dependencies: number
+  total_call_dependencies: number
+}
 export type ScoreThreshold = 'green' | 'yellow' | 'red'
 export type IssueSeverity = 'critical' | 'warning' | 'info'
 export type SteeringAction = 'PAUSE' | 'RESUME' | 'SKIP' | 'RETRY'
@@ -26,6 +38,27 @@ export interface ToolResultEvent {
   phase?: string
 }
 
+export interface ConversionNotes {
+  data_mapping_strategy?: string
+  control_flow_strategy?: string
+  io_strategy?: string
+  sql_strategy?: string | null
+  cics_strategy?: string | null
+  testing_notes?: string
+  risk_factors?: string[]
+  description?: string
+}
+
+export interface PhaseSummary {
+  count: number
+  total_loc: number
+  items: string[]
+}
+
+export interface ConversionGuidelines {
+  [key: string]: string | undefined
+}
+
 export interface PlanItem {
   id: string
   title: string
@@ -34,12 +67,18 @@ export interface PlanItem {
   program_id: string
   complexity: string
   score?: number
+  priority?: string
+  estimated_loc?: number
+  depends_on?: string[]
+  conversion_notes?: ConversionNotes
 }
 
 export interface PlanUpdateEvent {
   plan_id: string
   items: PlanItem[]
   progress_pct: number
+  phases?: Record<string, PhaseSummary>
+  conversion_guidelines?: ConversionGuidelines
 }
 
 export interface ScoreIssue {
@@ -78,6 +117,11 @@ export interface FlowNode {
   has_sql?: boolean
   has_cics?: boolean
   source_file?: string
+  // Structure chart detail
+  paragraphs?: string[]
+  sections?: string[]
+  performs?: string[]
+  data_items_count?: number
 }
 
 export interface FlowEdge {
@@ -130,6 +174,24 @@ export interface SteeringResponse {
   status: string
   item_id?: string
   reason?: string
+}
+
+export interface FileEntry {
+  path: string
+  name: string
+  relative: string
+}
+
+export interface FileList {
+  cobol: FileEntry[]
+  python: FileEntry[]
+}
+
+export interface FileContent {
+  path: string
+  name: string
+  content: string
+  language: string
 }
 
 export type SSEEventType =

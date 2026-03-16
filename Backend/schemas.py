@@ -47,9 +47,15 @@ class IssueSeverity(str, Enum):
 # ---------------------------------------------------------------------------
 # Request Models
 # ---------------------------------------------------------------------------
+class AnalyzeRequest(BaseModel):
+    source: str = "upload"  # "upload" | "sample"
+    cobol_dir: Optional[str] = None
+
+
 class ConvertRequest(BaseModel):
     cobol_dir: Optional[str] = None
     output_dir: str = "./output"
+    skip_scan: bool = False
 
 
 class SteeringCommand(BaseModel):
@@ -170,7 +176,7 @@ class ScoreEvent(ModuleScore):
 class FlowNode(BaseModel):
     id: str
     label: str
-    type: str = "program"  # program | copybook | cics
+    type: str = "program"  # program | copybook | cics | paragraph
     status: str = "pending"
     complexity: str = ""
     loc: int = 0
@@ -179,13 +185,18 @@ class FlowNode(BaseModel):
     has_cics: bool = False
     source_file: str = ""
     position: Optional[dict[str, float]] = None
+    # Structure chart detail
+    paragraphs: list[str] = []
+    sections: list[str] = []
+    performs: list[str] = []
+    data_items_count: int = 0
 
 
 class FlowEdge(BaseModel):
     id: str
     source: str
     target: str
-    type: str = "CALL"  # CALL | COPY
+    type: str = "CALL"  # CALL | COPY | PERFORM
 
 
 class FlowchartEvent(BaseModel):

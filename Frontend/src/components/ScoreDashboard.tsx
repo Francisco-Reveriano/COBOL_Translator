@@ -6,8 +6,51 @@
  * Click a score card to expand detailed issues, remediation, and summary.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ScoreEvent, ScoreIssue } from '../types/events'
+
+// ---------------------------------------------------------------------------
+// useAnimatedNumber — tick from old value to new with ease-out cubic
+// ---------------------------------------------------------------------------
+function useAnimatedNumber(target: number, durationMs = 600): { value: number; animating: boolean } {
+  const [display, setDisplay] = useState(target)
+  const [animating, setAnimating] = useState(false)
+  const prevRef = useRef(target)
+  const rafRef = useRef<number>(0)
+
+  const animate = useCallback((from: number, to: number) => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    setAnimating(true)
+    const start = performance.now()
+    const tick = (now: number) => {
+      const elapsed = now - start
+      const t = Math.min(elapsed / durationMs, 1)
+      // ease-out cubic: 1 - (1-t)^3
+      const eased = 1 - Math.pow(1 - t, 3)
+      setDisplay(from + (to - from) * eased)
+      if (t < 1) {
+        rafRef.current = requestAnimationFrame(tick)
+      } else {
+        setDisplay(to)
+        setAnimating(false)
+      }
+    }
+    rafRef.current = requestAnimationFrame(tick)
+  }, [durationMs])
+
+  useEffect(() => {
+    if (target !== prevRef.current) {
+      animate(prevRef.current, target)
+      prevRef.current = target
+    }
+  }, [target, animate])
+
+  useEffect(() => {
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current) }
+  }, [])
+
+  return { value: display, animating }
+}
 
 interface ScoreDashboardProps {
   scores: ScoreEvent[]
@@ -60,7 +103,10 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
           >
             {/* Compact summary row (always visible) */}
             <div
-              className="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:opacity-80"
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer"
+              style={{ transition: 'background-color 150ms ease' }}
+              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'color-mix(in srgb, var(--text-secondary) 5%, transparent)' }}
+              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent' }}
               onClick={() => setExpandedIdx(expandedIdx === i ? null : i)}
               role="button"
               aria-expanded={expandedIdx === i}
@@ -69,7 +115,7 @@ export function ScoreDashboard({ scores }: ScoreDashboardProps) {
               <span className="text-xs flex-1 truncate" style={{ color: 'var(--text-primary)' }}>
                 {s.module}
               </span>
-              <div className="flex gap-1.5">
+              <div className="flex gap-1">
                 <DimBadge label="C" value={s.scores.correctness} />
                 <DimBadge label="Co" value={s.scores.completeness} />
                 <DimBadge label="M" value={s.scores.maintainability} />
@@ -194,8 +240,8 @@ function ThresholdDot({ threshold, animate }: { threshold: string; animate?: boo
     'var(--score-red)'
   return (
     <div
-      className={`w-2.5 h-2.5 rounded-full ${animate ? 'score-ring-animate' : ''}`}
-      style={{ backgroundColor: color, color }}
+      className={`w-3 h-3 rounded-full flex-shrink-0 ${animate ? 'score-ring-animate' : ''}`}
+      style={{ backgroundColor: color, color, boxShadow: `0 0 4px ${color === 'var(--score-green)' ? 'var(--score-green)' : color === 'var(--score-yellow)' ? 'var(--score-yellow)' : 'var(--score-red)'}` }}
     />
   )
 }
@@ -204,21 +250,34 @@ function DimBadge({ label, value }: { label: string; value: number }) {
   const color =
     value >= 85 ? 'var(--score-green)' : value >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
   return (
-    <span className="text-[9px] font-mono" style={{ color }}>
-      {label}:{value}
+    <span
+      className="text-[10px] font-mono px-1.5 py-px rounded-full"
+      style={{
+        color,
+        backgroundColor: `color-mix(in srgb, ${color} 10%, var(--bg-card))`,
+        border: `1px solid color-mix(in srgb, ${color} 25%, transparent)`,
+      }}
+    >
+      {label} {value}
     </span>
   )
 }
 
 function OverallBadge({ score, label, animate }: { score: number; label?: string; animate?: boolean }) {
+  const { value: displayScore, animating: ticking } = useAnimatedNumber(score)
   const color =
-    score >= 85 ? 'var(--score-green)' : score >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
+    displayScore >= 85 ? 'var(--score-green)' : displayScore >= 70 ? 'var(--score-yellow)' : 'var(--score-red)'
+  const cssClass = [
+    'text-[10px] font-bold px-1.5 py-0.5 rounded',
+    animate ? 'score-badge-animate score-ring-animate' : '',
+    ticking ? 'score-tick-up' : '',
+  ].filter(Boolean).join(' ')
   return (
     <span
-      className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${animate ? 'score-badge-animate score-ring-animate' : ''}`}
+      className={cssClass}
       style={{ color, border: `1px solid ${color}` }}
     >
-      {score.toFixed(1)}{label ? ` ${label}` : ''}
+      {displayScore.toFixed(1)}{label ? ` ${label}` : ''}
     </span>
   )
 }
